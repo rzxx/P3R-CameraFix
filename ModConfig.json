@@ -3,7 +3,7 @@
   "ModName": "P3R Camera Fix",
   "ModAuthor": "rzxx",
   "ModVersion": "<REPLACED_VERSION_IN_CI>",
-  "ModDescription": "Removes camera smoothing/acceleration for responsive gamepad camera like P5R. Edit `Config.json` in Mod Folder to adjust settings.",
+  "ModDescription": "Removes the sluggish acceleration and smoothing from P3R's normal third-person camera. Edit Config.json to adjust settings.",
   "ModDll": "p3rpc.camfix.dll",
   "ModIcon": "",
   "ModR2RManagedDll32": "",
@@ -24,12 +24,8 @@
     }
   },
   "IsUniversalMod": false,
-  "ModDependencies": [
-    "Reloaded.Memory.SigScan.ReloadedII"
-  ],
+  "ModDependencies": ["Reloaded.Memory.SigScan.ReloadedII"],
   "OptionalDependencies": [],
-  "SupportedAppId": [
-    "p3r.exe"
-  ],
+  "SupportedAppId": ["p3r.exe"],
   "ProjectUrl": "https://github.com/rzxx/P3R-CameraFix"
 }
