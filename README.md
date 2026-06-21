@@ -72,4 +72,9 @@ The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the
 ## Credits
 
 - [rzxx](https://github.com/rzxx) -- author
-- Reloaded-II project and contributors for the mod loader framework
+- [p3rpc.nativetypes](https://github.com/AnimatedSwine37/p3rpc.nativetypes) by AnimatedSwine37 -- signature patterns for FUObjectArray and FNamePool
+- [p3rpc.essentials](https://github.com/AnimatedSwine37/p3rpc.essentials) by AnimatedSwine37 -- Reloaded-II mod template
+- [p5r-freecam](https://github.com/Secre-C/p5r-freecam) by Secre-C -- camera struct research reference
+- [UnrealEssentials](https://github.com/Rirurin/UnrealEssentials) by Rirurin -- Unreal Engine modding framework
+- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) -- Lua scripting and object dumping (research tool)
+- [Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II) -- mod loader framework
