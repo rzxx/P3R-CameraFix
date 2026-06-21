@@ -1,15 +1,16 @@
 # Persona 3 Reload Camera Fix
 
-A Reloaded-II mod that fixes the overworld camera smoothing and acceleration for gamepad, making camera movement feel responsive like Persona 5 Royal. Removes the sluggish camera acceleration curve and replaces it with immediate, precise control.
+A Reloaded-II mod that removes the sluggish acceleration and smoothing from P3R's normal third-person camera.
+
+P3R has two camera systems: fixed and normal third-person. This mod only affects the third-person one. Fixed cameras are left alone - they feel fine as-is.
 
 ## Features
 
-- Removes gamepad camera smoothing/acceleration in the overworld
-- Camera responds instantly to stick input, matching Persona 5 Royal feel
+- Removes gamepad camera smoothing/acceleration on the normal third-person camera
+- Camera responds instantly to stick input
 - Independent tunable values for yaw (horizontal) and pitch (vertical) camera movement
 - Configurable speed, acceleration, deceleration, and input delay parameters
 - All settings adjustable at runtime via Config.json
-- No permanent game file modifications. Runs entirely through Reloaded-II
 
 ## Installation
 
@@ -22,40 +23,42 @@ A Reloaded-II mod that fixes the overworld camera smoothing and acceleration for
 
 Edit `Config.json` inside the mod's folder to adjust camera behavior. The following parameters are available:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `YawSpeed` | 125.0 | Horizontal camera rotation speed |
-| `YawAcceleration` | 0.0 | Time to reach full speed (seconds, 0 = instant) |
-| `YawDeceleration` | 0.0 | Time to stop from full speed (seconds, 0 = instant) |
-| `YawPress` | 0.0 | Delay before horizontal rotation starts (seconds) |
-| `YawRelease` | 0.0 | Delay before horizontal deceleration kicks in (seconds) |
-| `PitchSpeed` | 90.0 | Vertical camera rotation speed |
-| `PitchAcceleration` | 0.0 | Time to reach full speed (seconds, 0 = instant) |
-| `PitchDeceleration` | 0.0 | Time to stop from full speed (seconds, 0 = instant) |
-| `PitchPress` | 0.0 | Delay before vertical rotation starts (seconds) |
-| `PitchRelease` | 0.0 | Delay before vertical deceleration kicks in (seconds) |
-| `CorrectionSpeed` | 35.0 | Auto-correction rotation speed |
-| `CorrectionAcceleration` | 0.5 | Auto-correction accel time (seconds, keep non-zero for smooth camera-follow) |
-| `CorrectionDeceleration` | 0.3 | Auto-correction decel time (seconds) |
-| `CorrectionPress` | 0.3 | Auto-correction press delay (seconds) |
-| `CorrectionRelease` | 0.0 | Auto-correction release delay (seconds) |
+| Parameter                | Default | Description                                                                  |
+| ------------------------ | ------- | ---------------------------------------------------------------------------- |
+| `YawSpeed`               | 125.0   | Horizontal camera rotation speed                                             |
+| `YawAcceleration`        | 0.0     | Time to reach full speed (seconds, 0 = instant)                              |
+| `YawDeceleration`        | 0.0     | Time to stop from full speed (seconds, 0 = instant)                          |
+| `YawPress`               | 0.0     | Delay before horizontal rotation starts (seconds)                            |
+| `YawRelease`             | 0.0     | Delay before horizontal deceleration kicks in (seconds)                      |
+| `PitchSpeed`             | 90.0    | Vertical camera rotation speed                                               |
+| `PitchAcceleration`      | 0.0     | Time to reach full speed (seconds, 0 = instant)                              |
+| `PitchDeceleration`      | 0.0     | Time to stop from full speed (seconds, 0 = instant)                          |
+| `PitchPress`             | 0.0     | Delay before vertical rotation starts (seconds)                              |
+| `PitchRelease`           | 0.0     | Delay before vertical deceleration kicks in (seconds)                        |
+| `CorrectionSpeed`        | 35.0    | Auto-correction rotation speed                                               |
+| `CorrectionAcceleration` | 0.5     | Auto-correction accel time (seconds, keep non-zero for smooth camera-follow) |
+| `CorrectionDeceleration` | 0.3     | Auto-correction decel time (seconds)                                         |
+| `CorrectionPress`        | 0.3     | Auto-correction press delay (seconds)                                        |
+| `CorrectionRelease`      | 0.0     | Auto-correction release delay (seconds)                                      |
 
 Values are applied live. Changes to Config.json take effect on the next scan cycle (every 1 second by default).
 
 ## How It Works
 
-The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the P3R executable, which provide access to all active Unreal Engine objects. A timer runs at a configurable interval to search for `FldCameraBehaviorFree` objects, the classes responsible for overworld camera movement. When found, the mod writes the configured values directly into each object's `YawParam`, `PitchParam`, and `CorrectionParam` fields, overriding the game's default acceleration curve.
+The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the P3R executable, which provide access to all active Unreal Engine objects. A timer runs at a configurable interval to search for `FldCameraBehaviorFree` objects, the classes responsible for normal third-person camera movement. When found, the mod writes the configured values directly into each object's `YawParam`, `PitchParam`, and `CorrectionParam` fields, overriding the game's default acceleration curve.
 
 **Target:** Persona 3 Reload (Steam/Windows), Unreal Engine 4.27.2, module `xrd777`
 
 ## Building from Source
 
 **Requirements:**
+
 - .NET 8.0 SDK or later
 - Reloaded-II mod loader installed
 - Persona 3 Reload (Steam/Windows)
 
 **Steps:**
+
 1. Clone the repository:
    ```
    git clone https://github.com/rzxx/P3R-CameraFix
@@ -67,6 +70,7 @@ The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the
 3. The compiled mod will be placed in the `publish` folder.
 
 **Dependencies:**
+
 - Reloaded.Memory.SigScan.ReloadedII (included with Reloaded-II)
 
 ## Credits
