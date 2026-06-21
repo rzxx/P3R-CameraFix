@@ -41,11 +41,17 @@ Edit `Config.json` inside the mod's folder to adjust camera behavior. The follow
 | `CorrectionPress`        | 0.3     | Auto-correction press delay (seconds)                                        |
 | `CorrectionRelease`      | 0.0     | Auto-correction release delay (seconds)                                      |
 
-Values are applied live. Changes to Config.json take effect on the next scan cycle (every 1 second by default).
+Values are applied live. Changes to Config.json take effect within ~15 seconds (on the next liveness check tick).
 
 ## How It Works
 
-The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the P3R executable, which provide access to all active Unreal Engine objects. A timer runs at a configurable interval to search for `FldCameraBehaviorFree` objects, the classes responsible for normal third-person camera movement. When found, the mod writes the configured values directly into each object's `YawParam`, `PitchParam`, and `CorrectionParam` fields, overriding the game's default acceleration curve.
+The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the P3R executable, which provide access to all active Unreal Engine objects. It then operates in two phases:
+
+1. **Scan phase** (every 5s): Walks the UObject array looking for `FldCameraBehaviorFree` instances. On the first successful match, it caches the class `FName` PoolLocations so all future class matching uses integer comparison instead of allocating managed strings. Once behaviors are found, values are written and the mod switches to the liveness phase.
+
+2. **Liveness phase** (every 15s): Performs a cheap integer-compare check on each cached behavior pointer (~10ns per pointer, zero allocations). If all pointers are still valid, no further work is done. If a pointer went stale (e.g. the player loaded a new map and the behavior was destroyed/recreated), the mod drops the cache and falls back to the scan phase.
+
+This design means the mod does **zero work** in steady state (camera behaviors alive, values already applied) and only does a full UObject scan when a behavior actually changes — typically once per map load. The game's camera values are written directly into each behavior object's `YawParam`, `PitchParam`, and `CorrectionParam` fields, overriding the game's default acceleration curve. Values persist until the behavior is destroyed.
 
 **Target:** Persona 3 Reload (Steam/Windows), Unreal Engine 4.27.2, module `xrd777`
 

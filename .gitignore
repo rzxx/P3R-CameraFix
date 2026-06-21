@@ -8,6 +8,10 @@ obj/
 # NuGet
 *.nupkg
 
+# Local-only MSBuild overrides (used for dev workspace sync paths)
+Directory.Build.props
+Directory.Build.targets
+
 # IDE
 .vs/
 .vscode/

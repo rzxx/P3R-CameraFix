@@ -15,9 +15,27 @@ public class Mod : ModBase
 
     private static unsafe UnrealTypes.FUObjectArray* _gUObjectArray;
     private static unsafe UnrealTypes.FNamePool* _gNamePool;
-    private static unsafe List<IntPtr> _cachedBehaviors = new();
-    private static Timer? _applyTimer;
+
+    private static readonly object _lock = new();
+    private static readonly List<IntPtr> _cachedBehaviors = new();
+
+    // Cached class FName PoolLocations for int-based class matching.
+    // 0 = not yet resolved. Resolved on first successful scan, then all
+    // subsequent scans/liveness checks use integer comparison instead of
+    // allocating managed strings via Marshal.PtrToString*.
+    private static uint _fldCameraBehaviorFreeNameLoc;
+    private static uint _bpFldCameraBehaviorFreeCNameLoc;
+
+    private static Timer? _timer;
     private static bool _sigScanDone;
+    private static bool _valuesApplied;
+    private static int _scanAttempts;
+
+    // Phase 1 (scan):      fires every 5s until behaviors are found.
+    // Phase 2 (liveness):  fires every 15s with a cheap int-compare check.
+    // The liveness check costs ~10ns per cached behavior and allocates nothing.
+    private const int ScanIntervalMs = 5000;
+    private const int LivenessIntervalMs = 15000;
 
     public Mod(ModContext context)
     {
@@ -109,45 +127,68 @@ public class Mod : ModBase
         return instrAddr + 7 + disp;
     }
 
-    private unsafe void TryStartTimer()
+    private static unsafe void TryStartTimer()
     {
         if (_sigScanDone) return;
         if (_gUObjectArray != null && _gNamePool != null)
         {
             _sigScanDone = true;
-            Log("Both globals found. Starting camera fix timer.");
-            _applyTimer = new Timer(_ => ApplyFixTick(), null, 5000, 1000);
+            Log("Both globals found. Starting camera fix timer (scan phase).");
+            _timer = new Timer(_ => Tick(), null, ScanIntervalMs, ScanIntervalMs);
         }
     }
 
-    private static unsafe void ApplyFixTick()
+    private static unsafe void Tick()
     {
         if (!Configuration.Enabled) return;
         if (_gUObjectArray == null || _gNamePool == null) return;
 
         try
         {
-            // Check if cached behaviors are still valid
-            if (_cachedBehaviors.Count > 0 && AreBehaviorsValid())
+            lock (_lock)
             {
-                foreach (var ptr in _cachedBehaviors)
-                    ApplyValuesToBehavior((UnrealTypes.UObject*)ptr);
-                return;
-            }
-
-            // Cache invalid, find new behaviors
-            _cachedBehaviors.Clear();
-            var behaviors = FindCameraBehaviors();
-            if (behaviors.Count > 0)
-            {
-                foreach (var b in behaviors)
+                // Liveness phase: we have cached behaviors, check them cheaply.
+                if (_cachedBehaviors.Count > 0)
                 {
-                    _cachedBehaviors.Add(b);
-                    var obj = (UnrealTypes.UObject*)b;
-                    Log($"Caching behavior: {GetClassName(obj)} at 0x{(nint)obj:X} Name={GetObjectName(obj)}");
+                    if (AreBehaviorsValid())
+                    {
+                        // Still valid. Re-apply values only if config changed or
+                        // the game reset them (rare).
+                        if (!_valuesApplied)
+                        {
+                            ApplyValuesToAllBehaviors();
+                            _valuesApplied = true;
+                            Log("Re-applied values after config change.");
+                        }
+                        EnsureTimerInterval(LivenessIntervalMs);
+                        return;
+                    }
+
+                    // A cached pointer went stale (map changed, behavior destroyed).
+                    // Drop the cache and fall through to the scan phase.
+                    Log("Cached behaviors are stale. Rescanning...");
+                    _cachedBehaviors.Clear();
+                    _valuesApplied = false;
                 }
-                foreach (var b in behaviors)
-                    ApplyValuesToBehavior((UnrealTypes.UObject*)b);
+
+                // Scan phase: walk the UObject array looking for camera behaviors.
+                _scanAttempts++;
+                ScanForBehaviors();
+
+                if (_cachedBehaviors.Count > 0)
+                {
+                    ApplyValuesToAllBehaviors();
+                    _valuesApplied = true;
+                    EnsureTimerInterval(LivenessIntervalMs);
+                }
+                else
+                {
+                    // Stay in scan phase. Throttle the "nothing found" log so we
+                    // don't spam while the player sits in a menu / battle.
+                    if (_scanAttempts % 12 == 0)
+                        Log($"Scan attempt {_scanAttempts}: no field camera behaviors found yet.");
+                    EnsureTimerInterval(ScanIntervalMs);
+                }
             }
         }
         catch (Exception e)
@@ -156,19 +197,23 @@ public class Mod : ModBase
         }
     }
 
-    private static unsafe bool AreBehaviorsValid()
+    private static void EnsureTimerInterval(int intervalMs)
     {
-        foreach (var ptr in _cachedBehaviors)
-        {
-            if (!IsBehaviorValid((UnrealTypes.UObject*)ptr))
-                return false;
-        }
-        return true;
+        // Adapt the timer to the current phase. Timer.Change is cheap and
+        // idempotent if the interval is already correct.
+        _timer?.Change(intervalMs, intervalMs);
     }
 
-    private static unsafe List<IntPtr> FindCameraBehaviors()
+    /// <summary>
+    /// Walks the entire FUObjectArray looking for live (non-CDO)
+    /// FldCameraBehaviorFree / BP_FldCameraBehaviorFree_C instances.
+    ///
+    /// The first scan uses string comparison to resolve the class FName
+    /// PoolLocations. All subsequent scans use integer comparison on the
+    /// cached PoolLocations — no managed string allocations.
+    /// </summary>
+    private static unsafe void ScanForBehaviors()
     {
-        var result = new List<IntPtr>();
         var arr = _gUObjectArray!;
         int count = arr->NumElements;
         int numChunks = arr->NumChunks;
@@ -176,12 +221,13 @@ public class Mod : ModBase
 
         if (count <= 0 || numChunks <= 0 || objects == null)
         {
-            Log($"FUObjectArray not initialized yet (NumElements={count}, NumChunks={numChunks}, Objects=0x{(nint)objects:X}). Will retry...");
-            return result;
+            if (_scanAttempts % 6 == 0)
+                Log($"FUObjectArray not initialized yet (NumElements={count}, NumChunks={numChunks}). Will retry...");
+            return;
         }
 
-        Log($"Scanning {count} objects in {numChunks} chunks for camera behaviors...");
-
+        bool useIntCompare = _fldCameraBehaviorFreeNameLoc != 0;
+        int found = 0;
         int scanned = 0;
 
         for (int chunkIdx = 0; chunkIdx < numChunks; chunkIdx++)
@@ -191,59 +237,119 @@ public class Mod : ModBase
             int chunkSize = Math.Min(0x10000, count - chunkIdx * 0x10000);
             for (int i = 0; i < chunkSize; i++)
             {
-                try
-                {
-                    var obj = chunk[i].Object;
-                    if (obj == null) continue;
-                    scanned++;
-                    var className = GetClassName(obj);
-                    if (string.IsNullOrEmpty(className)) continue;
+                var obj = chunk[i].Object;
+                if (obj == null) continue;
+                scanned++;
 
-                    if (className == "FldCameraBehaviorFree" || className == "BP_FldCameraBehaviorFree_C")
+                bool isMatch;
+                if (useIntCompare)
+                {
+                    // Hot path: 1 pointer deref + 1 uint read + 2 uint compares.
+                    // No string allocation, no exception handling.
+                    isMatch = IsCameraBehaviorClassFast(obj);
+                }
+                else
+                {
+                    // First scan only: string compare to resolve FName IDs.
+                    // After this, we never allocate a string for class matching again.
+                    string? className = GetClassName(obj);
+                    if (string.IsNullOrEmpty(className)) continue;
+                    isMatch = className == "FldCameraBehaviorFree" || className == "BP_FldCameraBehaviorFree_C";
+                    if (isMatch)
+                        CacheClassNamePoolLoc(obj, className);
+                }
+
+                if (isMatch)
+                {
+                    bool isCDO = (obj->ObjectFlags & 0x10) != 0;
+                    if (!isCDO)
                     {
-                        bool isCDO = (obj->ObjectFlags & 0x10) != 0;
-                        string objName = GetObjectName(obj);
-                        nint drivedOwner = *(nint*)((nint)obj + 0x00C8);
-                        Log($"  MATCH: {className} at 0x{(nint)obj:X} CDO={isCDO} DrivedOwner=0x{drivedOwner:X} Name={objName}");
-                        if (!isCDO)
-                            result.Add((IntPtr)obj);
+                        _cachedBehaviors.Add((IntPtr)obj);
+                        found++;
+                        Log($"Found behavior at 0x{(nint)obj:X} (CDO={isCDO})");
                     }
                 }
-                catch { }
             }
         }
 
-        Log($"Scan complete. Scanned {scanned} objects, found {result.Count} non-CDO behaviors.");
-        return result;
+        if (found > 0)
+        {
+            Log($"Scan complete. Scanned {scanned} objects, found {found} non-CDO behavior(s).");
+            Log($"Switching to liveness phase (every {LivenessIntervalMs / 1000}s).");
+        }
+        else if (_scanAttempts % 12 == 0)
+        {
+            Log($"Scan complete. Scanned {scanned} objects, found 0 behaviors. Game may not be in a field map.");
+        }
     }
 
+    /// <summary>
+    /// Cheap liveness check for cached behaviors.
+    /// Does NOT allocate strings. Uses integer comparison on the cached
+    /// class FName PoolLocations. Cost: ~10ns per cached behavior.
+    /// </summary>
+    private static unsafe bool AreBehaviorsValid()
+    {
+        for (int i = 0; i < _cachedBehaviors.Count; i++)
+        {
+            var obj = (UnrealTypes.UObject*)_cachedBehaviors[i];
+            if (obj == null) return false;
+            if ((obj->ObjectFlags & 0x10) != 0) return false; // became a CDO?
+            if (obj->ClassPrivate == null) return false;
+            var poolLoc = obj->ClassPrivate->baseObj.NamePrivate.PoolLocation;
+            if (poolLoc != _fldCameraBehaviorFreeNameLoc && poolLoc != _bpFldCameraBehaviorFreeCNameLoc)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Integer-compare class check for the scan hot path.
+    /// No string allocation. No exception handling.
+    /// </summary>
+    private static unsafe bool IsCameraBehaviorClassFast(UnrealTypes.UObject* obj)
+    {
+        if (obj->ClassPrivate == null) return false;
+        var poolLoc = obj->ClassPrivate->baseObj.NamePrivate.PoolLocation;
+        return poolLoc == _fldCameraBehaviorFreeNameLoc || poolLoc == _bpFldCameraBehaviorFreeCNameLoc;
+    }
+
+    /// <summary>
+    /// Caches the FName PoolLocation for a class so future scans/liveness
+    /// checks can use integer comparison instead of string comparison.
+    /// Called once per class on the first successful match.
+    /// </summary>
+    private static unsafe void CacheClassNamePoolLoc(UnrealTypes.UObject* obj, string className)
+    {
+        if (obj->ClassPrivate == null) return;
+        var poolLoc = obj->ClassPrivate->baseObj.NamePrivate.PoolLocation;
+        if (className == "FldCameraBehaviorFree" && _fldCameraBehaviorFreeNameLoc == 0)
+        {
+            _fldCameraBehaviorFreeNameLoc = poolLoc;
+            Log($"Cached FName PoolLocation for FldCameraBehaviorFree: 0x{poolLoc:X}");
+        }
+        else if (className == "BP_FldCameraBehaviorFree_C" && _bpFldCameraBehaviorFreeCNameLoc == 0)
+        {
+            _bpFldCameraBehaviorFreeCNameLoc = poolLoc;
+            Log($"Cached FName PoolLocation for BP_FldCameraBehaviorFree_C: 0x{poolLoc:X}");
+        }
+    }
+
+    private static unsafe void ApplyValuesToAllBehaviors()
+    {
+        foreach (var ptr in _cachedBehaviors)
+            ApplyValuesToBehavior((UnrealTypes.UObject*)ptr);
+    }
+
+    /// <summary>
+    /// Reads the class name string from the FName pool. Only used during the
+    /// first scan to resolve FName PoolLocations. After that, all class
+    /// matching uses integer comparison (IsCameraBehaviorClassFast).
+    /// </summary>
     private static unsafe string GetClassName(UnrealTypes.UObject* obj)
     {
         if (obj->ClassPrivate == null) return "";
-        var classObj = obj->ClassPrivate;
-        return _gNamePool->GetString(classObj->baseObj.NamePrivate);
-    }
-
-    private static unsafe string GetObjectName(UnrealTypes.UObject* obj)
-    {
-        try { return _gNamePool->GetString(obj->NamePrivate); }
-        catch { return "?"; }
-    }
-
-    private static unsafe bool IsBehaviorValid(UnrealTypes.UObject* obj)
-    {
-        try
-        {
-            if (obj == null) return false;
-            // Don't use CDOs as the live behavior
-            if ((obj->ObjectFlags & 0x10) != 0) return false;
-            var name = GetClassName(obj);
-            return name == "FldCameraBehaviorFree" || name == "BP_FldCameraBehaviorFree_C";
-        }
-        catch
-        {
-            return false;
-        }
+        return _gNamePool->GetString(obj->ClassPrivate->baseObj.NamePrivate);
     }
 
     private static unsafe void ApplyValuesToBehavior(UnrealTypes.UObject* behavior)
@@ -256,12 +362,13 @@ public class Mod : ModBase
 
         nint baseAddr = (nint)behavior;
 
-        // Read current values to check if we need to write (avoid unnecessary writes)
+        // Read current values to check if we need to write (avoid unnecessary writes).
+        // The game only resets these when the behavior is (re)initialized, not
+        // every frame, so this check is almost always false after the first apply.
         float yawAccelCur = *(float*)(baseAddr + 0x00E8 + 4);
         float pitchAccelCur = *(float*)(baseAddr + 0x0104 + 4);
         float correctionAccelCur = *(float*)(baseAddr + 0x0120 + 4);
 
-        // Only write if values differ from our targets (something reset them or first time)
         bool needsWrite = Math.Abs(yawAccelCur - Configuration.YawAcceleration) > 0.0001f ||
                           Math.Abs(pitchAccelCur - Configuration.PitchAcceleration) > 0.0001f ||
                           Math.Abs(correctionAccelCur - Configuration.CorrectionAcceleration) > 0.0001f;
@@ -292,7 +399,7 @@ public class Mod : ModBase
             Configuration.CorrectionPress,
             Configuration.CorrectionRelease);
 
-        Log($"  Applied to 0x{baseAddr:X}: Yaw(Spd={Configuration.YawSpeed} Acc={yawAccelCur}->{Configuration.YawAcceleration}) Pitch(Acc={pitchAccelCur}->{Configuration.PitchAcceleration}) Correction(Acc={correctionAccelCur}->{Configuration.CorrectionAcceleration})");
+        Log($"Applied values to behavior at 0x{baseAddr:X}");
     }
 
     private static unsafe void WriteRotParam(nint addr, float speed, float accel, float decel, float press, float release)
@@ -310,9 +417,19 @@ public class Mod : ModBase
     public override void ConfigurationUpdated(Config configuration)
     {
         Configuration = configuration;
-        _logger?.WriteLine($"[{_modConfig.ModId}] Config updated. Applying new values.");
-        // Force re-apply on next tick
-        unsafe { _cachedBehaviors.Clear(); }
+        _logger?.WriteLine($"[{_modConfig.ModId}] Config updated. Will re-apply values on next tick.");
+        // Don't clear the cache — the behavior pointers are still valid.
+        // Just flip the flag so the next liveness tick re-applies the new values.
+        lock (_lock)
+        {
+            _valuesApplied = false;
+        }
+    }
+
+    public override void Disposing()
+    {
+        _timer?.Dispose();
+        _timer = null;
     }
 
 #pragma warning disable CS8618

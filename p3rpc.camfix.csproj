@@ -27,4 +27,23 @@
     <PackageReference Include="Reloaded.Memory.SigScan.ReloadedII.Interfaces" Version="1.2.0" />
   </ItemGroup>
 
+  <!--
+    Dev workspace sync. Copies source files and built output to a local dev
+    workspace folder if P3RCamFixSyncDir is defined. The property is set in
+    a gitignored Directory.Build.props file so the path never leaks to GitHub.
+    If the file is absent (e.g. CI, other contributors), this target is a no-op.
+  -->
+  <Target Name="SyncToDevWorkspace" AfterTargets="Build"
+          Condition="'$(P3RCamFixSyncDir)' != '' And '$(P3RCamFixSkipSync)' != 'true'">
+    <Message Text="[P3R CamFix] Syncing source + build output to dev workspace: $(P3RCamFixSyncDir)" Importance="high" />
+    <ItemGroup>
+      <SyncSource Include="*.cs;*.csproj;ModConfig.json" />
+      <SyncTemplate Include="Template\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SyncSource)" DestinationFolder="$(P3RCamFixSyncDir)" />
+    <Copy SourceFiles="@(SyncTemplate)" DestinationFolder="$(P3RCamFixSyncDir)\Template\%(RecursiveDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(P3RCamFixSyncDir)" />
+    <Message Text="[P3R CamFix] Sync complete." Importance="high" />
+  </Target>
+
 </Project>
