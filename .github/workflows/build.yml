@@ -27,21 +27,21 @@ jobs:
       - name: Replace version placeholder
         shell: pwsh
         run: |
-          $path = "p3rpc.camfix/ModConfig.json"
-          $content = Get-Content -Path $path -Raw
+          $content = Get-Content -Path "ModConfig.json" -Raw
           $content = $content.Replace("<REPLACED_VERSION_IN_CI>", $env:VERSION)
-          Set-Content -Path $path -Value $content -NoNewline
+          Set-Content -Path "ModConfig.json" -Value $content -NoNewline
 
       - name: Publish
-        run: dotnet publish "p3rpc.camfix/p3rpc.camfix.csproj" -c Release -p:OutputPath=./publish
+        run: dotnet publish -c Release -p:OutputPath=./publish
 
       - name: Copy ModConfig
-        run: Copy-Item -Path "p3rpc.camfix/ModConfig.json" -Destination "p3rpc.camfix/publish/ModConfig.json"
+        shell: pwsh
+        run: Copy-Item -Path "ModConfig.json" -Destination "publish/ModConfig.json"
 
       - name: Package
         shell: pwsh
-        working-directory: p3rpc.camfix/publish
-        run: Compress-Archive -Path * -DestinationPath ../../P3R-CameraFix.zip
+        working-directory: publish
+        run: Compress-Archive -Path * -DestinationPath ../P3R-CameraFix.zip
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

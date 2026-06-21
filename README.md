@@ -62,9 +62,9 @@ The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the
    ```
 2. Open the solution in Visual Studio 2022 or build via command line:
    ```
-   dotnet build p3rpc.camfix/p3rpc.camfix.csproj
+   dotnet build
    ```
-3. The compiled mod will be placed in the `Publish` folder. See Reloaded-II documentation for packaging details.
+3. The compiled mod will be placed in the `publish` folder.
 
 **Dependencies:**
 - Reloaded.Memory.SigScan.ReloadedII (included with Reloaded-II)
