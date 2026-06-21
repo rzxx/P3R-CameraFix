@@ -16,3 +16,6 @@ obj/
 # OS
 .DS_Store
 Thumbs.db
+
+# CI artifacts
+job-logs.txt

@@ -11,7 +11,7 @@ public class Mod : ModBase
 {
     private static ILogger? _logger;
     private readonly IModConfig _modConfig;
-    public static Config Configuration;
+    public static Config Configuration = null!;
 
     private static unsafe UnrealTypes.FUObjectArray* _gUObjectArray;
     private static unsafe UnrealTypes.FNamePool* _gNamePool;
@@ -310,7 +310,7 @@ public class Mod : ModBase
     public override void ConfigurationUpdated(Config configuration)
     {
         Configuration = configuration;
-        _logger.WriteLine($"[{_modConfig.ModId}] Config updated. Applying new values.");
+        _logger?.WriteLine($"[{_modConfig.ModId}] Config updated. Applying new values.");
         // Force re-apply on next tick
         unsafe { _cachedBehaviors.Clear(); }
     }
