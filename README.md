@@ -9,7 +9,7 @@ A Reloaded-II mod that fixes the overworld camera smoothing and acceleration for
 - Independent tunable values for yaw (horizontal) and pitch (vertical) camera movement
 - Configurable speed, acceleration, deceleration, and input delay parameters
 - All settings adjustable at runtime via Config.json
-- No permanent game file modifications -- runs entirely through Reloaded-II
+- No permanent game file modifications. Runs entirely through Reloaded-II
 
 ## Installation
 
@@ -40,11 +40,11 @@ Edit `Config.json` inside the mod's folder to adjust camera behavior. The follow
 | `CorrectionPress` | 0.3 | Auto-correction press delay (seconds) |
 | `CorrectionRelease` | 0.0 | Auto-correction release delay (seconds) |
 
-Values are applied live -- changes to Config.json take effect the next time the mod re-scans (default: every 1 second).
+Values are applied live. Changes to Config.json take effect on the next scan cycle (every 1 second by default).
 
 ## How It Works
 
-The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the P3R executable, which provide access to all active Unreal Engine objects. A timer runs at a configurable interval to search for `FldCameraBehaviorFree` objects -- the classes responsible for overworld camera movement. When found, the mod writes the configured values directly into each object's `YawParam`, `PitchParam`, and `CorrectionParam` fields, overriding the game's default acceleration curve.
+The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the P3R executable, which provide access to all active Unreal Engine objects. A timer runs at a configurable interval to search for `FldCameraBehaviorFree` objects, the classes responsible for overworld camera movement. When found, the mod writes the configured values directly into each object's `YawParam`, `PitchParam`, and `CorrectionParam` fields, overriding the game's default acceleration curve.
 
 **Target:** Persona 3 Reload (Steam/Windows), Unreal Engine 4.27.2, module `xrd777`
 
