@@ -1,0 +1,35 @@
+{
+  "ModId": "p3rpc.camfix",
+  "ModName": "P3R Camera Fix",
+  "ModAuthor": "rzxx",
+  "ModVersion": "<REPLACED_VERSION_IN_CI>",
+  "ModDescription": "Removes camera smoothing/acceleration for responsive gamepad camera like P5R. Edit `Config.json` in Mod Folder to adjust settings.",
+  "ModDll": "p3rpc.camfix.dll",
+  "ModIcon": "",
+  "ModR2RManagedDll32": "",
+  "ModR2RManagedDll64": "p3rpc.camfix.dll",
+  "ModNativeDll32": "",
+  "ModNativeDll64": "",
+  "Tags": [],
+  "CanUnload": null,
+  "HasExports": null,
+  "IsLibrary": false,
+  "ReleaseMetadataFileName": "p3rpc.camfix.ReleaseMetadata.json",
+  "PluginData": {
+    "GitHubRelease": {
+      "UserName": "rzxx",
+      "RepositoryName": "P3R-CameraFix",
+      "UseReleaseTag": true,
+      "AssetFileName": "P3R-CameraFix.zip"
+    }
+  },
+  "IsUniversalMod": false,
+  "ModDependencies": [
+    "Reloaded.Memory.SigScan.ReloadedII"
+  ],
+  "OptionalDependencies": [],
+  "SupportedAppId": [
+    "p3r.exe"
+  ],
+  "ProjectUrl": "https://github.com/rzxx/P3R-CameraFix"
+}
