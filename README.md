@@ -71,7 +71,6 @@ The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the
 
 ## Credits
 
-- [rzxx](https://github.com/rzxx) - author
 - [p3rpc.nativetypes](https://github.com/rirurin/p3rpc.nativetypes) by Rirurin - signature patterns
 - [p3rpc.essentials](https://github.com/AnimatedSwine37/p3rpc.essentials) by AnimatedSwine37 - mod template
 - [p5r-freecam](https://github.com/rirurin/p5r-freecam) by Rirurin - camera struct research
