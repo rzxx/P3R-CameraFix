@@ -11,11 +11,33 @@
   "ModNativeDll32": "",
   "ModNativeDll64": "",
   "Tags": [],
-  "CanUnload": null,
-  "HasExports": null,
+  "CanUnload": false,
+  "HasExports": false,
   "IsLibrary": false,
   "ReleaseMetadataFileName": "p3rpc.camfix.ReleaseMetadata.json",
   "PluginData": {
+    "GitHubDependencies": {
+      "IdToConfigMap": {
+        "Reloaded.Memory.SigScan.ReloadedII": {
+          "Config": {
+            "UserName": "Reloaded-Project",
+            "RepositoryName": "Reloaded.Memory.SigScan",
+            "UseReleaseTag": false,
+            "AssetFileName": "Mod.zip"
+          },
+          "ReleaseMetadataName": "Reloaded.Memory.SigScan.ReloadedII.ReleaseMetadata.json"
+        },
+        "reloaded.sharedlib.hooks": {
+          "Config": {
+            "UserName": "Sewer56",
+            "RepositoryName": "Reloaded.SharedLib.Hooks.ReloadedII",
+            "UseReleaseTag": true,
+            "AssetFileName": "reloaded.sharedlib.hooks.zip"
+          },
+          "ReleaseMetadataName": "Sewer56.Update.ReleaseMetadata.json"
+        }
+      }
+    },
     "GitHubRelease": {
       "UserName": "rzxx",
       "RepositoryName": "P3R-CameraFix",
@@ -24,8 +46,13 @@
     }
   },
   "IsUniversalMod": false,
-  "ModDependencies": ["Reloaded.Memory.SigScan.ReloadedII"],
+  "ModDependencies": [
+    "Reloaded.Memory.SigScan.ReloadedII",
+    "reloaded.sharedlib.hooks"
+  ],
   "OptionalDependencies": [],
-  "SupportedAppId": ["p3r.exe"],
+  "SupportedAppId": [
+    "p3r.exe"
+  ],
   "ProjectUrl": "https://github.com/rzxx/P3R-CameraFix"
 }

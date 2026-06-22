@@ -1,5 +1,6 @@
 using p3rpc.camfix.Configuration;
 using p3rpc.camfix.Template.Configuration;
+using Reloaded.Hooks.ReloadedII.Interfaces;
 using Reloaded.Memory.SigScan.ReloadedII.Interfaces;
 using Reloaded.Mod.Interfaces;
 using Reloaded.Mod.Interfaces.Internal;
@@ -12,6 +13,7 @@ public class Startup : IMod
     private IModLoader _modLoader = null!;
     private Config _configuration = null!;
     private IModConfig _modConfig = null!;
+    private IReloadedHooks? _hooks;
     private ModBase _mod = new Mod();
 
     public void StartEx(IModLoaderV1 loaderApi, IModConfigV1 modConfig)
@@ -19,6 +21,7 @@ public class Startup : IMod
         _modLoader = (IModLoader)loaderApi;
         _modConfig = (IModConfig)modConfig;
         _logger = (ILogger)_modLoader.GetLogger();
+        _modLoader.GetController<IReloadedHooks>()?.TryGetTarget(out _hooks!);
 
         var configurator = new Configurator(_modLoader.GetModConfigDirectory(_modConfig.ModId));
         _configuration = configurator.GetConfiguration<Config>(0);
@@ -36,6 +39,7 @@ public class Startup : IMod
             Owner = this,
             Configuration = _configuration,
             StartupScanner = startupScanner!,
+            Hooks = _hooks,
         });
     }
 

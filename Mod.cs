@@ -1,50 +1,53 @@
 using p3rpc.camfix.Configuration;
 using p3rpc.camfix.Template;
+using Reloaded.Hooks.Definitions;
+using Reloaded.Hooks.ReloadedII.Interfaces;
 using Reloaded.Memory.SigScan.ReloadedII.Interfaces;
 using Reloaded.Mod.Interfaces;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
+using IReloadedHooks = Reloaded.Hooks.ReloadedII.Interfaces.IReloadedHooks;
 
 namespace p3rpc.camfix;
 
 public class Mod : ModBase
 {
+    private static readonly byte[] NativeBehaviorClassName =
+        System.Text.Encoding.ASCII.GetBytes("FldCameraBehaviorFree");
+
     private static ILogger? _logger;
+    private static IReloadedHooks? _hooks;
     private readonly IModConfig _modConfig;
     public static Config Configuration = null!;
 
     private static unsafe UnrealTypes.FUObjectArray* _gUObjectArray;
     private static unsafe UnrealTypes.FNamePool* _gNamePool;
 
-    private static readonly object _lock = new();
-    private static readonly List<IntPtr> _cachedBehaviors = new();
+    private static nint _nativeBehaviorClass;
+    private static nint _staticConstructObjectAddress;
+    private static IHook<StaticConstructObjectDelegate>? _staticConstructObjectHook;
 
-    // Cached class FName PoolLocations for int-based class matching.
-    // 0 = not yet resolved. Resolved on first successful scan, then all
-    // subsequent scans/liveness checks use integer comparison instead of
-    // allocating managed strings via Marshal.PtrToString*.
-    private static uint _fldCameraBehaviorFreeNameLoc;
-    private static uint _bpFldCameraBehaviorFreeCNameLoc;
+    private static readonly object _scanLock = new();
+    private static int _globalsResolved;
 
-    private static Timer? _timer;
-    private static bool _sigScanDone;
-    private static bool _valuesApplied;
-    private static int _scanAttempts;
+    [ThreadStatic]
+    private static int _constructionDepth;
 
-    // Phase 1 (scan):      fires every 5s until behaviors are found.
-    // Phase 2 (liveness):  fires every 15s with a cheap int-compare check.
-    // The liveness check costs ~10ns per cached behavior and allocates nothing.
-    private const int ScanIntervalMs = 5000;
-    private const int LivenessIntervalMs = 15000;
+    [ThreadStatic]
+    private static List<nint>? _pendingBehaviorPatches;
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private unsafe delegate UnrealTypes.UObject* StaticConstructObjectDelegate(
+        UnrealTypes.FStaticConstructObjectParameters* parameters);
 
     public Mod(ModContext context)
     {
         _logger = context.Logger;
+        _hooks = context.Hooks;
         _modConfig = context.ModConfig;
         Configuration = context.Configuration;
-
-        var baseAddress = Process.GetCurrentProcess().MainModule!.BaseAddress;
-        Log($"Initializing. Base address: 0x{baseAddress:X}");
 
         if (context.StartupScanner == null)
         {
@@ -52,384 +55,372 @@ public class Mod : ModBase
             return;
         }
 
-        ScanForGlobals(context.StartupScanner, baseAddress);
+        if (_hooks == null)
+        {
+            LogError("Reloaded hooks controller is unavailable. Install/enable reloaded.sharedlib.hooks.");
+            return;
+        }
+
+        var baseAddress = Process.GetCurrentProcess().MainModule!.BaseAddress;
+        Log($"Initializing event-driven camera fix. Base address: 0x{baseAddress:X}");
+        ScanRequiredAddresses(context.StartupScanner, baseAddress);
     }
 
-    private unsafe void ScanForGlobals(IStartupScanner scanner, nint baseAddress)
+    private unsafe void ScanRequiredAddresses(IStartupScanner scanner, nint baseAddress)
     {
-        // FUObjectArray sig (from p3rpc.nativetypes)
-        const string fuObjectArraySig = "48 8B 05 ?? ?? ?? ?? 48 8B 0C ?? 48 8D 04 ?? 48 85 C0 74 ?? 44 39 40 ?? 75 ?? F7 40 ?? 00 00 00 30 75 ?? 48 8B 00";
-
-        // FGlobalNamePool sig (from p3rpc.nativetypes)
-        const string fNamePoolSig = "4C 8D 05 ?? ?? ?? ?? EB ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 4C 8B C0 C6 05 ?? ?? ?? ?? 01 48 8B 44 24 ?? 48 8B D3 48 C1 E8 20 8D 0C ?? 49 03 4C ?? ?? E8 ?? ?? ?? ?? 48 8B C3";
+        const string fuObjectArraySig =
+            "48 8B 05 ?? ?? ?? ?? 48 8B 0C ?? 48 8D 04 ?? 48 85 C0 74 ?? 44 39 40 ?? 75 ?? F7 40 ?? 00 00 00 30 75 ?? 48 8B 00";
+        const string fNamePoolSig =
+            "4C 8D 05 ?? ?? ?? ?? EB ?? 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 4C 8B C0 C6 05 ?? ?? ?? ?? 01 48 8B 44 24 ?? 48 8B D3 48 C1 E8 20 8D 0C ?? 49 03 4C ?? ?? E8 ?? ?? ?? ?? 48 8B C3";
+        const string staticConstructObjectSig =
+            "48 89 5C 24 ?? 48 89 74 24 ?? 55 57 41 54 41 56 41 57 48 8D AC 24 ?? ?? ?? ?? 48 81 EC B0 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 85 ?? ?? ?? ?? 48 8B 39";
 
         scanner.AddMainModuleScan(fuObjectArraySig, result =>
         {
             if (!result.Found)
             {
-                LogError("FUObjectArray sig not found!");
+                LogError("FUObjectArray signature not found.");
                 return;
             }
-            // The sig finds `mov rax, [rip+X]` which loads the Objects field (at offset 0x10)
-            // from within the GUObjectArray global struct. So the resolved address points to
-            // &GUObjectArray.Objects, meaning the FUObjectArray struct starts 0x10 bytes before.
-            // No dereference needed — GUObjectArray is a static global, not a pointer.
-            var instrAddr = baseAddress + result.Offset;
-            var resolvedAddr = ResolveRipRelative(instrAddr);
-            _gUObjectArray = (UnrealTypes.FUObjectArray*)(resolvedAddr - 0x10);
-            Log($"Found FUObjectArray.Objects field at 0x{resolvedAddr:X}, struct at 0x{(nint)_gUObjectArray:X}");
-            TryStartTimer();
+
+            var instruction = baseAddress + result.Offset;
+            var objectsField = ResolveRipRelative(instruction);
+            _gUObjectArray = (UnrealTypes.FUObjectArray*)(objectsField - 0x10);
+            Log($"Found FUObjectArray at 0x{(nint)_gUObjectArray:X}.");
+            TryInitialize();
         });
 
         scanner.AddMainModuleScan(fNamePoolSig, result =>
         {
             if (!result.Found)
             {
-                LogError("FNamePool sig not found!");
+                LogError("FNamePool signature not found.");
                 return;
             }
-            // FNamePool sig uses `lea r8, [rip+X]` which gives the address of the global directly.
-            var instrAddr = baseAddress + result.Offset;
-            _gNamePool = (UnrealTypes.FNamePool*)ResolveRipRelative(instrAddr);
-            Log($"Found FNamePool at 0x{(nint)_gNamePool:X}");
-            TryStartTimer();
+
+            var instruction = baseAddress + result.Offset;
+            _gNamePool = (UnrealTypes.FNamePool*)ResolveRipRelative(instruction);
+            Log($"Found FNamePool at 0x{(nint)_gNamePool:X}.");
+            TryInitialize();
+        });
+
+        scanner.AddMainModuleScan(staticConstructObjectSig, result =>
+        {
+            if (!result.Found)
+            {
+                LogError("StaticConstructObject_Internal signature not found.");
+                return;
+            }
+
+            _staticConstructObjectAddress = baseAddress + result.Offset;
+            Log($"Found StaticConstructObject_Internal at 0x{_staticConstructObjectAddress:X}.");
+            TryInitialize();
         });
     }
 
-    private static unsafe nint ResolveRipRelative(nint instrAddr)
+    private static unsafe nint ResolveRipRelative(nint instruction)
     {
-        // For `mov rax, [rip+disp32]` or `lea rax, [rip+disp32]`:
-        // The displacement is a 32-bit signed int at offset +3 (after 48 8B 05 / 48 8D 05)
-        // But the sig might match at different instruction encodings.
-        // We scan the first few bytes for the pattern and find the disp32.
-        // Common: 48 8B 05 XX XX XX XX (7 bytes, disp at +3)
-        //         4C 8D 05 XX XX XX XX (7 bytes, disp at +3)
-        int disp;
-        byte b0 = *(byte*)instrAddr;
-        byte b1 = *(byte*)(instrAddr + 1);
-        byte b2 = *(byte*)(instrAddr + 2);
-
-        if ((b0 == 0x48 || b0 == 0x4C) && (b1 == 0x8B || b1 == 0x8D) && b2 == 0x05)
-        {
-            disp = *(int*)(instrAddr + 3);
-            return instrAddr + 7 + disp;
-        }
-
-        // Fallback: try 48 8D 0D (lea rcx)
-        if (b0 == 0x48 && b1 == 0x8D && b2 == 0x0D)
-        {
-            disp = *(int*)(instrAddr + 3);
-            return instrAddr + 7 + disp;
-        }
-
-        // Another fallback: just try offset +3
-        disp = *(int*)(instrAddr + 3);
-        return instrAddr + 7 + disp;
+        int displacement = *(int*)(instruction + 3);
+        return instruction + 7 + displacement;
     }
 
-    private static unsafe void TryStartTimer()
+    private static unsafe void TryInitialize()
     {
-        if (_sigScanDone) return;
-        if (_gUObjectArray != null && _gNamePool != null)
+        if (_gUObjectArray == null || _gNamePool == null || _staticConstructObjectAddress == 0)
+            return;
+        if (Interlocked.Exchange(ref _globalsResolved, 1) != 0)
+            return;
+
+        lock (_scanLock)
         {
-            _sigScanDone = true;
-            Log("Both globals found. Starting camera fix timer (scan phase).");
-            _timer = new Timer(_ => Tick(), null, ScanIntervalMs, ScanIntervalMs);
+            _staticConstructObjectHook = _hooks!
+                .CreateHook<StaticConstructObjectDelegate>(
+                    StaticConstructObject,
+                    _staticConstructObjectAddress);
+            _staticConstructObjectHook.Activate();
+
+            Log(
+                "Construction hook active. Writes are deferred until the " +
+                "outermost camera construction call returns.");
         }
     }
 
-    private static unsafe void Tick()
+    private static unsafe UnrealTypes.UObject* StaticConstructObject(
+        UnrealTypes.FStaticConstructObjectParameters* parameters)
     {
-        if (!Configuration.Enabled) return;
-        if (_gUObjectArray == null || _gNamePool == null) return;
+        UnrealTypes.UClass* requestedClass =
+            parameters == null ? null : parameters->Class;
+
+        // Almost every UObject takes this path. Once the camera class pointer
+        // is resolved, this is only two pointer comparisons before calling the
+        // original function. Re-entrancy tracking is limited to camera object
+        // construction and does not affect ordinary UObject creation.
+        if (!IsCameraBehaviorClass(requestedClass))
+            return _staticConstructObjectHook!.OriginalFunction(parameters);
+
+        _constructionDepth++;
+        try
+        {
+            UnrealTypes.UObject* created =
+                _staticConstructObjectHook!.OriginalFunction(parameters);
+
+            if (created != null && IsCameraBehaviorClass(created->ClassPrivate))
+                QueueBehaviorPatch((nint)created);
+
+            return created;
+        }
+        finally
+        {
+            _constructionDepth--;
+            if (_constructionDepth == 0)
+                FlushDeferredBehaviorPatches();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void QueueBehaviorPatch(nint behavior)
+    {
+        List<nint> pending = _pendingBehaviorPatches ??= new List<nint>(4);
+        for (int i = 0; i < pending.Count; i++)
+        {
+            if (pending[i] == behavior)
+                return;
+        }
+
+        pending.Add(behavior);
+    }
+
+    private static unsafe void FlushDeferredBehaviorPatches()
+    {
+        List<nint>? pending = _pendingBehaviorPatches;
+        if (pending == null || pending.Count == 0)
+            return;
 
         try
         {
-            lock (_lock)
+            if (!Configuration.Enabled)
+                return;
+
+            for (int i = 0; i < pending.Count; i++)
             {
-                // Liveness phase: we have cached behaviors, check them cheaply.
-                if (_cachedBehaviors.Count > 0)
+                UnrealTypes.UObject* behavior =
+                    (UnrealTypes.UObject*)pending[i];
+                if (behavior == null ||
+                    !IsCameraBehaviorClass(behavior->ClassPrivate))
                 {
-                    if (AreBehaviorsValid())
-                    {
-                        // Still valid. Re-apply values only if config changed or
-                        // the game reset them (rare).
-                        if (!_valuesApplied)
-                        {
-                            ApplyValuesToAllBehaviors();
-                            _valuesApplied = true;
-                            Log("Re-applied values after config change.");
-                        }
-                        EnsureTimerInterval(LivenessIntervalMs);
-                        return;
-                    }
-
-                    // A cached pointer went stale (map changed, behavior destroyed).
-                    // Drop the cache and fall through to the scan phase.
-                    Log("Cached behaviors are stale. Rescanning...");
-                    _cachedBehaviors.Clear();
-                    _valuesApplied = false;
+                    continue;
                 }
 
-                // Scan phase: walk the UObject array looking for camera behaviors.
-                _scanAttempts++;
-                ScanForBehaviors();
+                // StaticConstructObject_Internal can return an existing object
+                // from a later call. Avoid repeated writes and diagnostics when
+                // this object was already patched.
+                if (ValuesMatchConfiguration(behavior))
+                    continue;
 
-                if (_cachedBehaviors.Count > 0)
-                {
-                    ApplyValuesToAllBehaviors();
-                    _valuesApplied = true;
-                    EnsureTimerInterval(LivenessIntervalMs);
-                }
-                else
-                {
-                    // Stay in scan phase. Throttle the "nothing found" log so we
-                    // don't spam while the player sits in a menu / battle.
-                    if (_scanAttempts % 12 == 0)
-                        Log($"Scan attempt {_scanAttempts}: no field camera behaviors found yet.");
-                    EnsureTimerInterval(ScanIntervalMs);
-                }
+                ApplyConfiguredValues(behavior);
             }
         }
-        catch (Exception e)
+        finally
         {
-            LogError($"Tick error: {e.Message}");
+            pending.Clear();
         }
     }
 
-    private static void EnsureTimerInterval(int intervalMs)
+    private static unsafe void ScanAndApplyToAll(
+        string reason,
+        bool restoreDefaultsWhenDisabled)
     {
-        // Adapt the timer to the current phase. Timer.Change is cheap and
-        // idempotent if the interval is already correct.
-        _timer?.Change(intervalMs, intervalMs);
-    }
-
-    /// <summary>
-    /// Walks the entire FUObjectArray looking for live (non-CDO)
-    /// FldCameraBehaviorFree / BP_FldCameraBehaviorFree_C instances.
-    ///
-    /// The first scan uses string comparison to resolve the class FName
-    /// PoolLocations. All subsequent scans use integer comparison on the
-    /// cached PoolLocations — no managed string allocations.
-    /// </summary>
-    private static unsafe void ScanForBehaviors()
-    {
-        var arr = _gUObjectArray!;
-        int count = arr->NumElements;
-        int numChunks = arr->NumChunks;
-        var objects = arr->Objects;
-
-        if (count <= 0 || numChunks <= 0 || objects == null)
+        UnrealTypes.FUObjectArray* array = _gUObjectArray;
+        if (array == null || _gNamePool == null || array->Objects == null)
         {
-            if (_scanAttempts % 6 == 0)
-                Log($"FUObjectArray not initialized yet (NumElements={count}, NumChunks={numChunks}). Will retry...");
+            LogError($"Cannot run {reason} scan because Unreal globals are unavailable.");
             return;
         }
 
-        bool useIntCompare = _fldCameraBehaviorFreeNameLoc != 0;
-        int found = 0;
-        int scanned = 0;
-
-        for (int chunkIdx = 0; chunkIdx < numChunks; chunkIdx++)
+        int count = array->NumElements;
+        int chunks = array->NumChunks;
+        if (count <= 0 || chunks <= 0)
         {
-            var chunk = objects[chunkIdx];
+            LogError($"Cannot run {reason} scan: UObject array is empty.");
+            return;
+        }
+
+        int matched = 0;
+        bool applyFix = Configuration.Enabled;
+
+        for (int chunkIndex = 0; chunkIndex < chunks; chunkIndex++)
+        {
+            UnrealTypes.FUObjectItem* chunk = array->Objects[chunkIndex];
             if (chunk == null) continue;
-            int chunkSize = Math.Min(0x10000, count - chunkIdx * 0x10000);
-            for (int i = 0; i < chunkSize; i++)
+
+            int chunkSize = Math.Min(0x10000, count - chunkIndex * 0x10000);
+            for (int itemIndex = 0; itemIndex < chunkSize; itemIndex++)
             {
-                var obj = chunk[i].Object;
-                if (obj == null) continue;
-                scanned++;
+                UnrealTypes.UObject* obj = chunk[itemIndex].Object;
+                if (obj == null || obj->ClassPrivate == null) continue;
 
-                bool isMatch;
-                if (useIntCompare)
-                {
-                    // Hot path: 1 pointer deref + 1 uint read + 2 uint compares.
-                    // No string allocation, no exception handling.
-                    isMatch = IsCameraBehaviorClassFast(obj);
-                }
-                else
-                {
-                    // First scan only: string compare to resolve FName IDs.
-                    // After this, we never allocate a string for class matching again.
-                    string? className = GetClassName(obj);
-                    if (string.IsNullOrEmpty(className)) continue;
-                    isMatch = className == "FldCameraBehaviorFree" || className == "BP_FldCameraBehaviorFree_C";
-                    if (isMatch)
-                        CacheClassNamePoolLoc(obj, className);
-                }
+                UnrealTypes.UClass* objectClass = obj->ClassPrivate;
+                if (!IsCameraBehaviorClass(objectClass)) continue;
 
-                if (isMatch)
-                {
-                    bool isCDO = (obj->ObjectFlags & 0x10) != 0;
-                    if (!isCDO)
-                    {
-                        _cachedBehaviors.Add((IntPtr)obj);
-                        found++;
-                        Log($"Found behavior at 0x{(nint)obj:X} (CDO={isCDO})");
-                    }
-                }
+                matched++;
+
+                if (applyFix)
+                    ApplyConfiguredValues(obj);
+                else if (restoreDefaultsWhenDisabled)
+                    ApplyGameDefaults(obj);
             }
         }
 
-        if (found > 0)
+        Log(
+            $"{reason} scan processed {matched} camera behavior object(s): " +
+            $"Mode={(applyFix ? "configured values" : restoreDefaultsWhenDisabled ? "game defaults" : "resolve only")}.");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe bool IsCameraBehaviorClass(UnrealTypes.UClass* objectClass)
+    {
+        if (objectClass == null || _gNamePool == null) return false;
+
+        nint classAddress = (nint)objectClass;
+        nint resolvedClass = Volatile.Read(ref _nativeBehaviorClass);
+        if (resolvedClass != 0)
+            return classAddress == resolvedClass;
+
+        // Name matching only runs until the native class pointer is resolved.
+        // Every later construction event takes one pointer-comparison fast path.
+        if (_gNamePool->EqualsAnsi(
+                objectClass->baseObj.NamePrivate,
+                NativeBehaviorClassName))
         {
-            Log($"Scan complete. Scanned {scanned} objects, found {found} non-CDO behavior(s).");
-            Log($"Switching to liveness phase (every {LivenessIntervalMs / 1000}s).");
+            Volatile.Write(ref _nativeBehaviorClass, classAddress);
+            Log($"Resolved native camera behavior class at 0x{classAddress:X}.");
+            return true;
         }
-        else if (_scanAttempts % 12 == 0)
-        {
-            Log($"Scan complete. Scanned {scanned} objects, found 0 behaviors. Game may not be in a field map.");
-        }
+
+        return false;
     }
 
-    /// <summary>
-    /// Cheap liveness check for cached behaviors.
-    /// Does NOT allocate strings. Uses integer comparison on the cached
-    /// class FName PoolLocations. Cost: ~10ns per cached behavior.
-    /// </summary>
-    private static unsafe bool AreBehaviorsValid()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void ApplyConfiguredValues(UnrealTypes.UObject* behavior)
     {
-        for (int i = 0; i < _cachedBehaviors.Count; i++)
-        {
-            var obj = (UnrealTypes.UObject*)_cachedBehaviors[i];
-            if (obj == null) return false;
-            if ((obj->ObjectFlags & 0x10) != 0) return false; // became a CDO?
-            if (obj->ClassPrivate == null) return false;
-            var poolLoc = obj->ClassPrivate->baseObj.NamePrivate.PoolLocation;
-            if (poolLoc != _fldCameraBehaviorFreeNameLoc && poolLoc != _bpFldCameraBehaviorFreeCNameLoc)
-                return false;
-        }
-        return true;
+        nint address = (nint)behavior;
+        Config config = Configuration;
+
+        WriteRotParam(
+            address + 0x00E8,
+            config.YawSpeed,
+            config.YawAcceleration,
+            config.YawDeceleration,
+            config.YawPress,
+            config.YawRelease);
+        WriteRotParam(
+            address + 0x0104,
+            config.PitchSpeed,
+            config.PitchAcceleration,
+            config.PitchDeceleration,
+            config.PitchPress,
+            config.PitchRelease);
+        WriteRotParam(
+            address + 0x0120,
+            config.CorrectionSpeed,
+            config.CorrectionAcceleration,
+            config.CorrectionDeceleration,
+            config.CorrectionPress,
+            config.CorrectionRelease);
     }
 
-    /// <summary>
-    /// Integer-compare class check for the scan hot path.
-    /// No string allocation. No exception handling.
-    /// </summary>
-    private static unsafe bool IsCameraBehaviorClassFast(UnrealTypes.UObject* obj)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe bool ValuesMatchConfiguration(
+        UnrealTypes.UObject* behavior)
     {
-        if (obj->ClassPrivate == null) return false;
-        var poolLoc = obj->ClassPrivate->baseObj.NamePrivate.PoolLocation;
-        return poolLoc == _fldCameraBehaviorFreeNameLoc || poolLoc == _bpFldCameraBehaviorFreeCNameLoc;
+        nint address = (nint)behavior;
+        Config config = Configuration;
+
+        return RotParamMatches(
+                   address + 0x00E8,
+                   config.YawSpeed,
+                   config.YawAcceleration,
+                   config.YawDeceleration,
+                   config.YawPress,
+                   config.YawRelease) &&
+               RotParamMatches(
+                   address + 0x0104,
+                   config.PitchSpeed,
+                   config.PitchAcceleration,
+                   config.PitchDeceleration,
+                   config.PitchPress,
+                   config.PitchRelease) &&
+               RotParamMatches(
+                   address + 0x0120,
+                   config.CorrectionSpeed,
+                   config.CorrectionAcceleration,
+                   config.CorrectionDeceleration,
+                   config.CorrectionPress,
+                   config.CorrectionRelease);
     }
 
-    /// <summary>
-    /// Caches the FName PoolLocation for a class so future scans/liveness
-    /// checks can use integer comparison instead of string comparison.
-    /// Called once per class on the first successful match.
-    /// </summary>
-    private static unsafe void CacheClassNamePoolLoc(UnrealTypes.UObject* obj, string className)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe bool RotParamMatches(
+        nint address,
+        float speed,
+        float acceleration,
+        float deceleration,
+        float press,
+        float release)
     {
-        if (obj->ClassPrivate == null) return;
-        var poolLoc = obj->ClassPrivate->baseObj.NamePrivate.PoolLocation;
-        if (className == "FldCameraBehaviorFree" && _fldCameraBehaviorFreeNameLoc == 0)
-        {
-            _fldCameraBehaviorFreeNameLoc = poolLoc;
-            Log($"Cached FName PoolLocation for FldCameraBehaviorFree: 0x{poolLoc:X}");
-        }
-        else if (className == "BP_FldCameraBehaviorFree_C" && _bpFldCameraBehaviorFreeCNameLoc == 0)
-        {
-            _bpFldCameraBehaviorFreeCNameLoc = poolLoc;
-            Log($"Cached FName PoolLocation for BP_FldCameraBehaviorFree_C: 0x{poolLoc:X}");
-        }
+        const float epsilon = 0.0001f;
+        return MathF.Abs(*(float*)(address + 0) - speed) <= epsilon &&
+               MathF.Abs(*(float*)(address + 4) - acceleration) <= epsilon &&
+               MathF.Abs(*(float*)(address + 8) - deceleration) <= epsilon &&
+               MathF.Abs(*(float*)(address + 12) - press) <= epsilon &&
+               MathF.Abs(*(float*)(address + 16) - release) <= epsilon;
     }
 
-    private static unsafe void ApplyValuesToAllBehaviors()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void ApplyGameDefaults(UnrealTypes.UObject* behavior)
     {
-        foreach (var ptr in _cachedBehaviors)
-            ApplyValuesToBehavior((UnrealTypes.UObject*)ptr);
+        nint address = (nint)behavior;
+        WriteRotParam(address + 0x00E8, 125.0f, 0.1f, 0.1f, 0.05f, 0.1f);
+        WriteRotParam(address + 0x0104, 90.0f, 0.1f, 0.1f, 0.0f, 0.1f);
+        WriteRotParam(address + 0x0120, 35.0f, 0.5f, 0.3f, 0.3f, 0.0f);
     }
 
-    /// <summary>
-    /// Reads the class name string from the FName pool. Only used during the
-    /// first scan to resolve FName PoolLocations. After that, all class
-    /// matching uses integer comparison (IsCameraBehaviorClassFast).
-    /// </summary>
-    private static unsafe string GetClassName(UnrealTypes.UObject* obj)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void WriteRotParam(
+        nint address,
+        float speed,
+        float acceleration,
+        float deceleration,
+        float press,
+        float release)
     {
-        if (obj->ClassPrivate == null) return "";
-        return _gNamePool->GetString(obj->ClassPrivate->baseObj.NamePrivate);
+        *(float*)(address + 0) = speed;
+        *(float*)(address + 4) = acceleration;
+        *(float*)(address + 8) = deceleration;
+        *(float*)(address + 12) = press;
+        *(float*)(address + 16) = release;
     }
 
-    private static unsafe void ApplyValuesToBehavior(UnrealTypes.UObject* behavior)
-    {
-        // FldCameraRotParam layout: Speed(0), Acceleration(4), Deceleration(8), Press(12), Release(16) = 20 bytes
-        // UFldCameraBehaviorFree offsets (from v0.7 dump):
-        //   0x00E8: YawParam     (FldCameraRotParam, 20 bytes)
-        //   0x0104: PitchParam   (FldCameraRotParam, 20 bytes)
-        //   0x0120: CorrectionParam (FldCameraCorrectionParam = FldCameraRotParam + Margin, 24 bytes)
+    private static void Log(string message) =>
+        _logger?.WriteLine($"[P3R CamFix] {message}");
 
-        nint baseAddr = (nint)behavior;
-
-        // Read current values to check if we need to write (avoid unnecessary writes).
-        // The game only resets these when the behavior is (re)initialized, not
-        // every frame, so this check is almost always false after the first apply.
-        float yawAccelCur = *(float*)(baseAddr + 0x00E8 + 4);
-        float pitchAccelCur = *(float*)(baseAddr + 0x0104 + 4);
-        float correctionAccelCur = *(float*)(baseAddr + 0x0120 + 4);
-
-        bool needsWrite = Math.Abs(yawAccelCur - Configuration.YawAcceleration) > 0.0001f ||
-                          Math.Abs(pitchAccelCur - Configuration.PitchAcceleration) > 0.0001f ||
-                          Math.Abs(correctionAccelCur - Configuration.CorrectionAcceleration) > 0.0001f;
-
-        if (!needsWrite) return;
-
-        // YawParam at 0x00E8
-        WriteRotParam(baseAddr + 0x00E8,
-            Configuration.YawSpeed,
-            Configuration.YawAcceleration,
-            Configuration.YawDeceleration,
-            Configuration.YawPress,
-            Configuration.YawRelease);
-
-        // PitchParam at 0x0104
-        WriteRotParam(baseAddr + 0x0104,
-            Configuration.PitchSpeed,
-            Configuration.PitchAcceleration,
-            Configuration.PitchDeceleration,
-            Configuration.PitchPress,
-            Configuration.PitchRelease);
-
-        // CorrectionParam at 0x0120
-        WriteRotParam(baseAddr + 0x0120,
-            Configuration.CorrectionSpeed,
-            Configuration.CorrectionAcceleration,
-            Configuration.CorrectionDeceleration,
-            Configuration.CorrectionPress,
-            Configuration.CorrectionRelease);
-
-        Log($"Applied values to behavior at 0x{baseAddr:X}");
-    }
-
-    private static unsafe void WriteRotParam(nint addr, float speed, float accel, float decel, float press, float release)
-    {
-        *(float*)(addr + 0) = speed;
-        *(float*)(addr + 4) = accel;
-        *(float*)(addr + 8) = decel;
-        *(float*)(addr + 12) = press;
-        *(float*)(addr + 16) = release;
-    }
-
-    private static void Log(string msg) => _logger?.WriteLine($"[P3R CamFix] {msg}");
-    private static void LogError(string msg) => _logger?.WriteLine($"[P3R CamFix] {msg}", System.Drawing.Color.Red);
+    private static void LogError(string message) =>
+        _logger?.WriteLine($"[P3R CamFix] {message}", System.Drawing.Color.Red);
 
     public override void ConfigurationUpdated(Config configuration)
     {
         Configuration = configuration;
-        _logger?.WriteLine($"[{_modConfig.ModId}] Config updated. Will re-apply values on next tick.");
-        // Don't clear the cache — the behavior pointers are still valid.
-        // Just flip the flag so the next liveness tick re-applies the new values.
-        lock (_lock)
-        {
-            _valuesApplied = false;
-        }
-    }
 
-    public override void Disposing()
-    {
-        _timer?.Dispose();
-        _timer = null;
+        if (Volatile.Read(ref _globalsResolved) == 0)
+        {
+            _logger?.WriteLine($"[{_modConfig.ModId}] Configuration updated before initialization.");
+            return;
+        }
+
+        lock (_scanLock)
+        {
+            ScanAndApplyToAll("configuration update", restoreDefaultsWhenDisabled: true);
+        }
     }
 
 #pragma warning disable CS8618

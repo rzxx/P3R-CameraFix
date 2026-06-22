@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Diagnostics;
 
 namespace p3rpc.camfix;
 
@@ -20,7 +19,6 @@ internal static unsafe class UnrealTypes
     public struct UClass
     {
         [FieldOffset(0x0)] public UObject baseObj;
-        [FieldOffset(0x118)] public UObject* ClassDefaultObject;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -46,6 +44,21 @@ internal static unsafe class UnrealTypes
         [FieldOffset(0x0)] public UObject* Object;
     }
 
+    [StructLayout(LayoutKind.Explicit, Size = 0x40)]
+    public struct FStaticConstructObjectParameters
+    {
+        [FieldOffset(0x0)] public UClass* Class;
+        [FieldOffset(0x8)] public UObject* Outer;
+        [FieldOffset(0x10)] public FName Name;
+        [FieldOffset(0x18)] public uint SetFlags;
+        [FieldOffset(0x1c)] public uint InternalSetFlags;
+        [FieldOffset(0x20)] public byte CopyTransientsFromClassDefaults;
+        [FieldOffset(0x21)] public byte AssumeTemplateIsArchetype;
+        [FieldOffset(0x28)] public UObject* Template;
+        [FieldOffset(0x30)] public IntPtr InstanceGraph;
+        [FieldOffset(0x38)] public IntPtr ExternalPackage;
+    }
+
     [StructLayout(LayoutKind.Explicit, Size = 0x10)]
     public struct FNamePool
     {
@@ -58,27 +71,25 @@ internal static unsafe class UnrealTypes
                 return *((IntPtr*)(self + 1) + poolIdx);
         }
 
-        public string GetString(FName name) => GetString(name.PoolLocation);
-
-        public string GetString(uint poolLoc)
+        public bool EqualsAnsi(FName name, ReadOnlySpan<byte> expected)
         {
-            fixed (FNamePool* self = &this)
-            {
-                IntPtr ptr = GetPool(poolLoc >> 0x10);
-                ptr += (nint)((poolLoc & 0xFFFF) * 2);
-                return GetStringFromPtr(ptr);
-            }
-        }
+            IntPtr ptr = GetPool(name.PoolLocation >> 0x10);
+            if (ptr == IntPtr.Zero) return false;
 
-        private static string GetStringFromPtr(IntPtr ptr)
-        {
+            ptr += (nint)((name.PoolLocation & 0xFFFF) * 2);
             short flags = *(short*)ptr;
             int length = flags >> 6;
             bool isWide = (flags & 1) != 0;
-            IntPtr strPtr = ptr + 2;
-            return isWide
-                ? Marshal.PtrToStringUni(strPtr, length) ?? ""
-                : Marshal.PtrToStringAnsi(strPtr, length) ?? "";
+            if (isWide || length != expected.Length) return false;
+
+            byte* chars = (byte*)(ptr + 2);
+            for (int i = 0; i < expected.Length; i++)
+            {
+                if (chars[i] != expected[i]) return false;
+            }
+
+            return true;
         }
+
     }
 }

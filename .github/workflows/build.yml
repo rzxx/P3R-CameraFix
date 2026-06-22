@@ -34,11 +34,7 @@ jobs:
           Set-Content -Path "ModConfig.json" -Value $content -NoNewline
 
       - name: Publish
-        run: dotnet publish -c Release -p:OutputPath=./publish
-
-      - name: Copy ModConfig
-        shell: pwsh
-        run: Copy-Item -Path "ModConfig.json" -Destination "publish/ModConfig.json"
+        run: dotnet publish -c Release -o ./publish
 
       - name: Package
         shell: pwsh
