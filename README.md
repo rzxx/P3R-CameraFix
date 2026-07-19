@@ -2,7 +2,26 @@
 
 A Reloaded-II mod that removes the sluggish acceleration and smoothing from P3R's normal third-person camera.
 
-P3R has two camera systems: fixed and normal third-person. This mod only affects the third-person one. Fixed cameras are left alone - they feel fine as-is.
+## Experimental spline/rail camera vNext
+
+The current development build contains an opt-in experimental path for the constrained spline/rail camera used in some field areas. Set `EnableExperimentalSplineCamera` to `true` and restart the game to test it.
+
+- Replaces the native 166.7 ms target interpolation and its 0.05/0.10 retarget thresholds with same-tick output.
+- Reads the right stick directly from XInput, before the game's large upstream deadzone, then applies a configurable radial deadzone and response curve.
+- Accumulates physical raw mouse counts into a persistent angle bounded by the area's yaw/pitch margins. A stationary glance remains held; after a configurable idle delay, authored rail motion can trigger a smooth return to center.
+- Restores missing foreground raw-mouse registration when safe and falls back to the game's legacy mouse axis until raw packets resume after menus or device switches.
+- Rejects a raw packet only when it matches a recent large game-driven `SetCursorPos` warp; unmatched physical raw input remains uncapped and unsmoothed by this guard.
+- Uses direct zero-smoothing mouse response by default; optional nonzero mouse smoothing is explicitly latency-adding.
+- Obeys P3R's native `AFldOperator.KeyState` input-ownership gate, so dialogue, rail-transition, and paused-menu input cannot move or preload the camera; cursor requests never control camera input.
+- Restores P3R's intended center framing when native input ownership is lost, using a coordinated configurable-duration return instead of the game's rigid 20-degrees-per-second follower.
+- Suppresses P3R's erroneous arrow only for a short configurable cursor-only grace after native ownership loss; legitimate dialogue/menu cursor handling remains independent from camera input.
+- Prevents a recent stale legacy-axis sample from canceling an unfinished lock recenter when healthy raw input was just observed; genuine raw movement remains immediate.
+- Uses conservative default spline-mouse sensitivities of `0.04` horizontal and `0.03` vertical degrees per physical count.
+- Keeps all existing normal/free-camera settings unchanged.
+
+This is an experimental build for the currently validated `AFldCameraHitSpline` path. Literal fixed-camera locations have not yet been runtime-tested. To return to v1 behavior, set `EnableExperimentalSplineCamera` to `false` and restart the game.
+
+P3R has distinct free, spline/rail, and literal fixed field-camera paths. The stable v1 patch affects the free camera; the opt-in development path additionally targets the runtime-validated spline/rail camera. Literal fixed cameras remain untouched pending a confirmed test location.
 
 ## Features
 

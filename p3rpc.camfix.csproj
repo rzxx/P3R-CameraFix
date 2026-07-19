@@ -14,6 +14,8 @@
   <ItemGroup>
     <None Remove="ModConfig.json" />
     <None Remove="Preview.png" />
+    <!-- Research utilities are independent console projects. -->
+    <Compile Remove="Research\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +26,7 @@
 
   <ItemGroup>
     <PackageReference Include="Reloaded.Mod.Interfaces" Version="2.3.0" ExcludeAssets="runtime" />
+    <PackageReference Include="Reloaded.SharedLib.Hooks" Version="1.9.0" />
     <PackageReference Include="Reloaded.Memory.SigScan.ReloadedII.Interfaces" Version="1.2.0" />
   </ItemGroup>
 

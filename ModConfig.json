@@ -16,6 +16,19 @@
   "IsLibrary": false,
   "ReleaseMetadataFileName": "p3rpc.camfix.ReleaseMetadata.json",
   "PluginData": {
+    "GitHubDependencies": {
+      "IdToConfigMap": {
+        "reloaded.sharedlib.hooks": {
+          "Config": {
+            "UserName": "Sewer56",
+            "RepositoryName": "Reloaded.SharedLib.Hooks.ReloadedII",
+            "UseReleaseTag": true,
+            "AssetFileName": "reloaded.sharedlib.hooks.zip"
+          },
+          "ReleaseMetadataName": "Sewer56.Update.ReleaseMetadata.json"
+        }
+      }
+    },
     "GitHubRelease": {
       "UserName": "rzxx",
       "RepositoryName": "P3R-CameraFix",
@@ -24,7 +37,7 @@
     }
   },
   "IsUniversalMod": false,
-  "ModDependencies": ["Reloaded.Memory.SigScan.ReloadedII"],
+  "ModDependencies": ["Reloaded.Memory.SigScan.ReloadedII", "reloaded.sharedlib.hooks"],
   "OptionalDependencies": [],
   "SupportedAppId": ["p3r.exe"],
   "ProjectUrl": "https://github.com/rzxx/P3R-CameraFix"
