@@ -59,7 +59,8 @@ public class Mod : ModBase
 
         ScanForGlobals(context.StartupScanner, baseAddress);
 
-        if (Configuration.EnableExperimentalSplineCamera || Configuration.EnableExperimentalFreeCamera)
+        if (Configuration.EnableExperimentalSplineCamera || Configuration.EnableExperimentalFreeCamera ||
+            Configuration.EnableCameraTransitionTrace)
         {
             if (context.Hooks == null)
             {

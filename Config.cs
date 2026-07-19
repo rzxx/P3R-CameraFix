@@ -155,6 +155,18 @@ public class Config : Configurable<Config>
     [DefaultValue(1.0f)]
     public float FreeControllerSensitivity { get; set; } = 1.0f;
 
+    [DisplayName("Hide Cursor During Native Camera Fades")]
+    [Category("Experimental - Camera Cursor")]
+    [Description("Suppresses P3R's erroneous Windows arrow for native fade transactions in free and spline gameplay, from fade start until field input ownership resumes. Dialogue and menu cursor ownership remain native. Requires a game restart.")]
+    [DefaultValue(true)]
+    public bool EnableNativeFadeCursorGuard { get; set; } = true;
+
+    [DisplayName("Native Fade Cursor Timing Bridge")]
+    [Category("Experimental - Camera Cursor")]
+    [Description("Seconds to bridge the measured operation-sampling gaps immediately before and after P3R's native fade mode in free and spline cameras. Cursor-only; does not change camera input or ownership. Default: 0.075.")]
+    [DefaultValue(0.075f)]
+    public float NativeFadeCursorBridgeSeconds { get; set; } = 0.075f;
+
     [DisplayName("Enable Experimental Free Camera Trace")]
     [Category("Diagnostics")]
     [Description("Logs free-camera source selection, direct inputs, raw timing, and resulting component angles. Requires a game restart.")]
@@ -299,12 +311,6 @@ public class Config : Configurable<Config>
     [DefaultValue(true)]
     public bool EnableSplineGameplayCursorGuard { get; set; } = true;
 
-    [DisplayName("Spline Cursor Native-Lock Grace")]
-    [Category("Experimental - Spline Camera")]
-    [Description("Seconds to suppress P3R's erroneous arrow after field input becomes disabled. Cursor-only; never freezes or enables camera input. Default: 0.2.")]
-    [DefaultValue(0.2f)]
-    public float SplineCursorNativeLockGraceSeconds { get; set; } = 0.2f;
-
     [DisplayName("Enable Legacy Mouse Fallback")]
     [Category("Experimental - Spline Camera")]
     [Description("When WM_INPUT is unavailable, integrates the game's legacy mouse axis as an FPS-independent angular velocity instead of disabling the mouse.")]
@@ -328,6 +334,12 @@ public class Config : Configurable<Config>
     [Description("Logs vNext raw counts, device ownership, targets, filtered output, and final degree offsets for diagnosis. Requires a game restart.")]
     [DefaultValue(false)]
     public bool EnableExperimentalSplineTrace { get; set; } = false;
+
+    [DisplayName("Enable Camera Transition Trace")]
+    [Category("Diagnostics")]
+    [Description("Research mode. Continuously logs camera ownership, Windows cursor calls, and the native UI fade-player state across free, spline, loading, and camera-handoff periods. Read-only; requires a game restart.")]
+    [DefaultValue(false)]
+    public bool EnableCameraTransitionTrace { get; set; } = false;
 
     [DisplayName("Enable Camera Filter Trace")]
     [Category("Diagnostics")]

@@ -25,6 +25,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const ushort GenericDesktopUsagePage = 0x0001;
     private const ushort MouseUsage = 0x0002;
     private const int FldCameraHitSplineVtableRva = 0x4294058;
+    private const int FldCameraFreeVtableRva = 0x42901B0;
+    private const int FldCameraHitBoxVtableRva = 0x42939A8;
     private const int SplineStateOffset = 0x2A8;
     private const float RailMotionHoldDuration = 0.25f;
     private const float RailPositionSpeedThreshold = 5.0f;
@@ -47,6 +49,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private readonly Reloaded.Mod.Interfaces.ILogger _logger;
     private readonly Reloaded.Hooks.ReloadedII.Interfaces.IReloadedHooks _hooks;
     private readonly nint _imageBase;
+    private readonly CameraTransitionTrace? _transitionTrace;
+    private readonly UnrealFadeProbe? _fadeProbe;
     private readonly IHook<PeekMessageWDelegate>? _peekMessageHook;
     private readonly IHook<SetCursorPosDelegate>? _setCursorPosHook;
     private readonly IHook<SetCursorDelegate>? _setCursorHook;
@@ -70,6 +74,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private int _pendingSetCursorSuppressedCalls;
     private int _pendingShowCursorCalls;
     private nint _lastSetCursorRequested;
+    private nint _lastSetCursorApplied;
     private long _lastSetCursorQpc;
     private int _lastShowCursorShow;
     private int _lastShowCursorResult;
@@ -78,8 +83,16 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private float _lastSplineDeltaTime;
     private long _lastNativeOwnershipQpc;
     private long _lastNativeInputDisabledQpc;
+    private long _lastFreeOperationQpc;
+    private long _lastFreeNativeInputDisabledQpc;
+    private long _lastNativeFadeActiveQpc;
     private long _lastAcceptedRawMouseQpc;
     private int _lastOperatorKeyState;
+    private int _lastFreeOperatorKeyState;
+    private int _lastFadeProbeStatus;
+    private int _lastFadeMode;
+    private int _nativeFadeTransactionActive;
+    private float _lastFreeDeltaTime;
     private int _splineInputEnabledSinceResume;
     private int _frameMouseX;
     private int _frameMouseY;
@@ -162,6 +175,14 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _logger = context.Logger;
         _hooks = context.Hooks!;
         _imageBase = imageBase;
+
+        if (Mod.Configuration.EnableCameraTransitionTrace ||
+            (Mod.Configuration.EnableNativeFadeCursorGuard &&
+             (Mod.Configuration.EnableExperimentalFreeCamera || Mod.Configuration.EnableExperimentalSplineCamera)))
+            _fadeProbe = new UnrealFadeProbe(context, imageBase);
+
+        if (Mod.Configuration.EnableCameraTransitionTrace)
+            _transitionTrace = new CameraTransitionTrace(context, imageBase);
 
         if (Mod.Configuration.EnableExperimentalSplineTrace)
         {
@@ -380,6 +401,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         else
             Interlocked.Increment(ref _pendingSetCursorNonzeroCalls);
         Volatile.Write(ref _lastSetCursorRequested, cursor);
+        Volatile.Write(ref _lastSetCursorApplied, appliedCursor);
         Volatile.Write(ref _lastSetCursorQpc, now);
         return result;
     }
@@ -435,6 +457,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _operationSequence++;
         _frameOperationQpc = Stopwatch.GetTimestamp();
         CaptureNativeInputOwnership(operation);
+        FadeSnapshot fade = _fadeProbe?.Capture() ?? default;
+        CaptureFadeCursorState(operation, deltaTime, fade);
         _frameMouseX = Interlocked.Exchange(ref _pendingMouseX, 0);
         _frameMouseY = Interlocked.Exchange(ref _pendingMouseY, 0);
         _frameMouseFirstQpc = Interlocked.Exchange(ref _pendingMouseFirstQpc, 0);
@@ -495,7 +519,64 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _lastOperationStickX = stickX;
         _lastOperationStickY = stickY;
 
+        CameraTransitionObservation transition = default;
+        if (_transitionTrace != null)
+        {
+            transition = new CameraTransitionObservation
+            {
+                OperationSequence = _operationSequence,
+                QpcEnter = _frameOperationQpc,
+                Operation = operation,
+                DeltaTime = deltaTime,
+                IdentityBefore = _transitionTrace.CaptureIdentity(operation),
+                KernelInput = _frameKernelInput,
+                DefaultInputComponent = _frameDefaultInputComponent,
+                CurrentInputComponent = _frameCurrentInputComponent,
+                ShowMouseCursor = _frameShowMouseCursor,
+                Device = (int)next,
+                DeviceSwitch = _deviceChangedThisFrame ? 1 : 0,
+                MouseSource = (int)_frameMouseSource,
+                MouseX = _frameMouseX,
+                MouseY = _frameMouseY,
+                RawFirstQpc = _frameMouseFirstQpc,
+                RawLastQpc = _frameMouseLastQpc,
+                CursorVisibleBefore = _cursorVisible,
+                CursorXBefore = _cursorX,
+                CursorYBefore = _cursorY,
+                CursorHandleBefore = _cursorHandle,
+                WmSetCursorPrevious = _frameWmSetCursor,
+                SetCursorPrevious = _frameSetCursorCalls,
+                SetCursorZeroPrevious = _frameSetCursorZeroCalls,
+                SetCursorNonzeroPrevious = _frameSetCursorNonzeroCalls,
+                SetCursorSuppressedPrevious = _frameSetCursorSuppressedCalls,
+                ShowCursorPrevious = _frameShowCursorCalls,
+                MessageWindow = Volatile.Read(ref _messageWindow),
+            };
+        }
+
         _operationTickHook!.OriginalFunction(operation, deltaTime);
+
+        if (_transitionTrace != null)
+        {
+            transition.QpcExit = Stopwatch.GetTimestamp();
+            CaptureCursorState();
+            transition.CursorVisibleAfter = _cursorVisible;
+            transition.CursorXAfter = _cursorX;
+            transition.CursorYAfter = _cursorY;
+            transition.CursorHandleAfter = _cursorHandle;
+            transition.SetCursorPendingAfter = Volatile.Read(ref _pendingSetCursorCalls);
+            transition.SetCursorZeroPendingAfter = Volatile.Read(ref _pendingSetCursorZeroCalls);
+            transition.SetCursorNonzeroPendingAfter = Volatile.Read(ref _pendingSetCursorNonzeroCalls);
+            transition.SetCursorSuppressedPendingAfter = Volatile.Read(ref _pendingSetCursorSuppressedCalls);
+            transition.LastSetCursorRequested = Volatile.Read(ref _lastSetCursorRequested);
+            transition.LastSetCursorApplied = Volatile.Read(ref _lastSetCursorApplied);
+            transition.LastSetCursorQpc = Volatile.Read(ref _lastSetCursorQpc);
+            transition.ShowCursorPendingAfter = Volatile.Read(ref _pendingShowCursorCalls);
+            transition.LastShowCursorShow = Volatile.Read(ref _lastShowCursorShow);
+            transition.LastShowCursorResult = Volatile.Read(ref _lastShowCursorResult);
+            transition.LastShowCursorQpc = Volatile.Read(ref _lastShowCursorQpc);
+            _transitionTrace.Capture(transition, fade);
+        }
 
         _frameMouseX = 0;
         _frameMouseY = 0;
@@ -1297,6 +1378,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             }
         }
         _traceFlushTimer?.Dispose();
+        _transitionTrace?.Dispose();
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -1381,6 +1463,60 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _framePlayerInput = *(nint*)(kernelInput + 0x348);
     }
 
+    private void CaptureFadeCursorState(nint operation, float deltaTime, in FadeSnapshot fade)
+    {
+        Volatile.Write(ref _lastFadeProbeStatus, fade.Status);
+        Volatile.Write(ref _lastFadeMode, unchecked((int)fade.Mode));
+
+        long now = _frameOperationQpc != 0 ? _frameOperationQpc : Stopwatch.GetTimestamp();
+        if (fade.Status == 2 && fade.Mode != 0)
+            Volatile.Write(ref _lastNativeFadeActiveQpc, now);
+
+        if (_frameOperatorKeyState == 3)
+            Volatile.Write(ref _nativeFadeTransactionActive, 0);
+        else if (fade.Status == 2 && fade.Mode != 0)
+            Volatile.Write(ref _nativeFadeTransactionActive, 1);
+
+        if (!IsFreeOperationCamera(operation))
+            return;
+
+        Volatile.Write(ref _lastFreeOperationQpc, now);
+        Volatile.Write(ref _lastFreeDeltaTime, deltaTime);
+
+        int previousKeyState = Volatile.Read(ref _lastFreeOperatorKeyState);
+        if (previousKeyState == 3 && _frameOperatorKeyState != 3)
+            Volatile.Write(ref _lastFreeNativeInputDisabledQpc, now);
+        Volatile.Write(ref _lastFreeOperatorKeyState, _frameOperatorKeyState);
+
+    }
+
+    private bool IsFreeOperationCamera(nint operation)
+    {
+        if (operation == 0)
+            return false;
+
+        nint owner = *(nint*)(operation + 0xB0);
+        if (owner == 0)
+            return false;
+
+        nint hit = *(nint*)(operation + 0xB8);
+        nint camera;
+        if (hit == 0)
+        {
+            camera = *(nint*)(owner + 0x240);
+        }
+        else if (*(nint*)hit == _imageBase + FldCameraHitBoxVtableRva)
+        {
+            camera = *(nint*)(hit + 0x2E8);
+        }
+        else
+        {
+            return false;
+        }
+
+        return camera != 0 && *(nint*)camera == _imageBase + FldCameraFreeVtableRva;
+    }
+
     private float CursorWarpCandidateAgeMilliseconds()
     {
         long candidate = Volatile.Read(ref _warpCandidateQpc);
@@ -1417,6 +1553,33 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     private bool ShouldSuppressGameplayCursor(long now)
     {
+        int liveFadeMode = 0;
+        bool haveLiveFadeMode = _fadeProbe?.TryReadLiveMode(out liveFadeMode) == true;
+        bool liveMessageCursorOwner = false;
+        bool liveActorUiCursorOwner = false;
+        _fadeProbe?.TryReadLiveMessageCursorOwner(out liveMessageCursorOwner);
+        _fadeProbe?.TryReadLiveActorUiCursorOwner(out liveActorUiCursorOwner);
+        bool liveNativeUiCursorOwner = liveMessageCursorOwner || liveActorUiCursorOwner;
+        if (ShouldSuppressNativeFadeTransactionCursor(
+            Mod.Configuration.EnableNativeFadeCursorGuard,
+            Volatile.Read(ref _lastFadeProbeStatus),
+            Volatile.Read(ref _nativeFadeTransactionActive) != 0,
+            haveLiveFadeMode,
+            liveFadeMode))
+            return true;
+
+        return ShouldSuppressSplineGameplayCursor(now, liveNativeUiCursorOwner) ||
+               ShouldSuppressFreeFadeCursor(now, liveNativeUiCursorOwner);
+    }
+
+    private static bool ShouldSuppressNativeFadeTransactionCursor(
+        bool enabled, int fadeProbeStatus, bool transactionActive,
+        bool liveFadeModeAvailable, int liveFadeMode) =>
+        enabled && fadeProbeStatus == 2 && transactionActive &&
+        liveFadeModeAvailable && liveFadeMode != 0;
+
+    private bool ShouldSuppressSplineGameplayCursor(long now, bool nativeUiCursorOwner)
+    {
         if (!Mod.Configuration.EnableSplineGameplayCursorGuard)
             return false;
         long recentSpline = Volatile.Read(ref _lastSplineUpdateQpc);
@@ -1431,12 +1594,53 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         long ownership = Volatile.Read(ref _lastNativeOwnershipQpc);
         if (ownership == 0 || now - ownership < 0 || now - ownership > Stopwatch.Frequency / 4)
             return true;
-        float nativeLockGrace = Math.Clamp(Mod.Configuration.SplineCursorNativeLockGraceSeconds, 0f, 2f);
-        if (IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeInputDisabledQpc), nativeLockGrace))
-            return true;
+        if (Mod.Configuration.EnableNativeFadeCursorGuard)
+        {
+            if (ShouldSuppressNativeFadeTransactionHold(
+                    Volatile.Read(ref _nativeFadeTransactionActive) != 0, nativeUiCursorOwner) ||
+                ShouldSuppressNativeFadeCursor(
+                    Volatile.Read(ref _lastFadeProbeStatus), Volatile.Read(ref _lastFadeMode)))
+                return true;
+            float bridge = Math.Clamp(Mod.Configuration.NativeFadeCursorBridgeSeconds, 0f, 0.25f);
+            if (IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeInputDisabledQpc), bridge) ||
+                IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeFadeActiveQpc), bridge))
+                return true;
+        }
         return Volatile.Read(ref _lastOperatorKeyState) == 3 ||
                Volatile.Read(ref _splineInputEnabledSinceResume) == 0;
     }
+
+    private bool ShouldSuppressFreeFadeCursor(long now, bool nativeUiCursorOwner)
+    {
+        if (!Mod.Configuration.EnableNativeFadeCursorGuard)
+            return false;
+
+        long recentFree = Volatile.Read(ref _lastFreeOperationQpc);
+        float bridge = Math.Clamp(Mod.Configuration.NativeFadeCursorBridgeSeconds, 0f, 0.25f);
+        return ShouldSuppressFreeFadeCursorState(
+            recentFree != 0 && now >= recentFree && now - recentFree <= Stopwatch.Frequency / 4,
+            Volatile.Read(ref _lastFreeDeltaTime),
+            Volatile.Read(ref _lastFadeProbeStatus),
+            Volatile.Read(ref _lastFadeMode),
+            ShouldSuppressNativeFadeTransactionHold(
+                Volatile.Read(ref _nativeFadeTransactionActive) != 0, nativeUiCursorOwner),
+            IsWithinQpcGrace(now, Volatile.Read(ref _lastFreeNativeInputDisabledQpc), bridge),
+            IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeFadeActiveQpc), bridge));
+    }
+
+    private static bool ShouldSuppressFreeFadeCursorState(
+        bool recentFreeCamera, float deltaTime, int fadeProbeStatus, int fadeMode,
+        bool nativeFadeTransactionActive, bool withinDisableBridge, bool withinPostFadeBridge) =>
+        recentFreeCamera && deltaTime > 0.000001f && fadeProbeStatus == 2 &&
+        (nativeFadeTransactionActive || ShouldSuppressNativeFadeCursor(fadeProbeStatus, fadeMode) ||
+         withinDisableBridge || withinPostFadeBridge);
+
+    private static bool ShouldSuppressNativeFadeCursor(int fadeProbeStatus, int fadeMode) =>
+        fadeProbeStatus == 2 && fadeMode != 0;
+
+    private static bool ShouldSuppressNativeFadeTransactionHold(
+        bool nativeFadeTransactionActive, bool nativeUiCursorOwner) =>
+        nativeFadeTransactionActive && !nativeUiCursorOwner;
 
     private static bool IsWithinQpcGrace(long now, long start, float seconds)
     {
