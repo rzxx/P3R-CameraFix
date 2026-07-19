@@ -3,7 +3,7 @@
   "ModName": "P3R Camera Fix",
   "ModAuthor": "rzxx",
   "ModVersion": "<REPLACED_VERSION_IN_CI>",
-  "ModDescription": "Removes the sluggish acceleration and smoothing from P3R's normal third-person camera. Edit Config.json to adjust settings.",
+  "ModDescription": "Responsive raw-mouse and direct-gamepad controls for P3R's free and spline/rail cameras.",
   "ModDll": "p3rpc.camfix.dll",
   "ModIcon": "",
   "ModR2RManagedDll32": "",

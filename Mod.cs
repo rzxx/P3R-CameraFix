@@ -59,22 +59,23 @@ public class Mod : ModBase
 
         ScanForGlobals(context.StartupScanner, baseAddress);
 
-        if (Configuration.EnableExperimentalSplineCamera || Configuration.EnableExperimentalFreeCamera ||
-            Configuration.EnableCameraTransitionTrace)
+        if (Configuration.Enabled &&
+            (Configuration.EnableSplineCameraFix || Configuration.EnableFreeCameraFix ||
+             Configuration.EnableCameraTransitionTrace))
         {
             if (context.Hooks == null)
             {
-                LogError("Experimental spline-camera fix requested, but Reloaded.Hooks is unavailable.");
+                LogError("Responsive camera input requested, but Reloaded.Hooks is unavailable.");
             }
             else
             {
                 _experimentalSplineCamera = new ExperimentalSplineCamera(context, baseAddress);
-                if (Configuration.EnableExperimentalFreeCamera)
+                if (Configuration.EnableFreeCameraFix)
                     _experimentalFreeCamera = new ExperimentalFreeCamera(context, baseAddress, _experimentalSplineCamera);
             }
         }
 
-        if (Configuration.EnableCameraFilterTrace)
+        if (Configuration.EnableNativeCameraFilterTrace)
         {
             if (context.Hooks == null)
             {
@@ -98,7 +99,7 @@ public class Mod : ModBase
             }
         }
 
-        if (Configuration.EnableFixedCameraTrace)
+        if (Configuration.EnableLiteralFixedCameraTrace)
         {
             if (context.Hooks == null)
             {
@@ -424,10 +425,10 @@ public class Mod : ModBase
         // The game only resets these when the behavior is (re)initialized, not
         // every frame, so this check is almost always false after the first apply.
         bool needsWrite = !RotParamMatches(baseAddr + 0x00E8,
-                              Configuration.YawSpeed, Configuration.YawAcceleration, Configuration.YawDeceleration,
+                              Configuration.GamepadHorizontalSpeed, Configuration.YawAcceleration, Configuration.YawDeceleration,
                               Configuration.YawPress, Configuration.YawRelease) ||
                           !RotParamMatches(baseAddr + 0x0104,
-                              Configuration.PitchSpeed, Configuration.PitchAcceleration, Configuration.PitchDeceleration,
+                              Configuration.GamepadVerticalSpeed, Configuration.PitchAcceleration, Configuration.PitchDeceleration,
                               Configuration.PitchPress, Configuration.PitchRelease) ||
                           !RotParamMatches(baseAddr + 0x0120,
                               Configuration.CorrectionSpeed, Configuration.CorrectionAcceleration, Configuration.CorrectionDeceleration,
@@ -437,7 +438,7 @@ public class Mod : ModBase
 
         // YawParam at 0x00E8
         WriteRotParam(baseAddr + 0x00E8,
-            Configuration.YawSpeed,
+            Configuration.GamepadHorizontalSpeed,
             Configuration.YawAcceleration,
             Configuration.YawDeceleration,
             Configuration.YawPress,
@@ -445,7 +446,7 @@ public class Mod : ModBase
 
         // PitchParam at 0x0104
         WriteRotParam(baseAddr + 0x0104,
-            Configuration.PitchSpeed,
+            Configuration.GamepadVerticalSpeed,
             Configuration.PitchAcceleration,
             Configuration.PitchDeceleration,
             Configuration.PitchPress,

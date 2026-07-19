@@ -61,7 +61,7 @@ internal sealed unsafe class FixedCameraTrace : IDisposable
         _logger = context.Logger;
         _hooks = context.Hooks!;
         _imageBase = imageBase;
-        int capacity = Math.Clamp(Mod.Configuration.CameraFilterTraceCapacity, 1024, 2_000_000);
+        int capacity = Math.Clamp(Mod.Configuration.TraceCapacity, 1024, 2_000_000);
         _slots = new TraceSlot[capacity];
 
         string modDirectory = context.ModLoader.GetDirectoryForModId(context.ModConfig.ModId);

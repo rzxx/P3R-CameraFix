@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 namespace p3rpc.camfix;
 
 /// <summary>
-/// Experimental normal/free-camera input replacement. Mouse displacement is
+/// Responsive normal/free-camera input replacement. Mouse displacement is
 /// inserted at the exact native pitch/yaw delta sites after P3R's velocity
 /// filter, while controller demand replaces AFldCameraBase.Input before the
 /// otherwise-native free-camera update.
@@ -61,9 +61,9 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
         _mouseOverrideState = Marshal.AllocHGlobal(16);
         new Span<byte>((void*)_mouseOverrideState, 16).Clear();
 
-        if (Mod.Configuration.EnableExperimentalFreeCameraTrace)
+        if (Mod.Configuration.EnableFreeCameraTrace)
         {
-            int capacity = Math.Clamp(Mod.Configuration.CameraFilterTraceCapacity, 1024, 2_000_000);
+            int capacity = Math.Clamp(Mod.Configuration.TraceCapacity, 1024, 2_000_000);
             _traceSlots = new TraceSlot[capacity];
             string modDirectory = context.ModLoader.GetDirectoryForModId(context.ModConfig.ModId);
             string traceDirectory = Path.Combine(modDirectory, "ResearchTraces");
@@ -75,18 +75,18 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
             _traceWriter.WriteLine("sequence,qpc_enter,qpc_exit,operation_sequence,operator_key_state,camera_lock,behavior,owner,owner_behavior_match,owner_flag_258,device,device_switch,mouse_source,delta_time,mouse_x,mouse_y,raw_first_age_ms,raw_last_age_ms,stick_x,stick_y,native_x,native_y,applied_x,applied_y,mouse_override,controller_override,mouse_pitch_delta,mouse_yaw_delta,pitch_before,pitch_after,yaw_before,yaw_after,pitch_speed_before,pitch_speed_after,yaw_speed_before,yaw_speed_after");
             _traceWriter.Flush();
             _traceFlushTimer = new Timer(_ => FlushTrace(), null, 500, 500);
-            _logger.WriteLine($"[P3R CamFix] Experimental free-camera trace active: {tracePath}");
+            _logger.WriteLine($"[P3R CamFix] Free-camera debug trace active: {tracePath}");
         }
 
         context.StartupScanner.AddMainModuleScan(FreeCameraUpdateSignature, result =>
         {
             if (!result.Found)
             {
-                _logger.WriteLine("[P3R CamFix] Experimental free-camera update signature not found; free-camera fix disabled.", System.Drawing.Color.Red);
+                _logger.WriteLine("[P3R CamFix] Free-camera update signature not found; free-camera fix disabled.", System.Drawing.Color.Red);
                 return;
             }
 
-            _logger.WriteLine($"[P3R CamFix] Experimental free-camera update signature resolved at P3R.exe+0x{result.Offset:X}; creating hook.");
+            _logger.WriteLine($"[P3R CamFix] Free-camera update signature resolved at P3R.exe+0x{result.Offset:X}; creating hook.");
             try
             {
                 _freeCameraUpdateHook = _hooks.CreateHook<FreeCameraUpdateDelegate>(FreeCameraUpdate, _imageBase + result.Offset);
@@ -96,7 +96,7 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
             }
             catch (Exception exception)
             {
-                _logger.WriteLine($"[P3R CamFix] Experimental free-camera update hook failed: {exception.Message}", System.Drawing.Color.Red);
+                _logger.WriteLine($"[P3R CamFix] Free-camera update hook failed: {exception.Message}", System.Drawing.Color.Red);
             }
         });
 
@@ -104,11 +104,11 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
         {
             if (!result.Found)
             {
-                _logger.WriteLine("[P3R CamFix] Experimental free-camera pitch-delta signature not found; raw mouse disabled.", System.Drawing.Color.Red);
+                _logger.WriteLine("[P3R CamFix] Free-camera pitch-delta signature not found; raw mouse disabled.", System.Drawing.Color.Red);
                 return;
             }
 
-            _logger.WriteLine($"[P3R CamFix] Experimental free-camera pitch-delta signature resolved at P3R.exe+0x{result.Offset:X}; creating hook.");
+            _logger.WriteLine($"[P3R CamFix] Free-camera pitch-delta signature resolved at P3R.exe+0x{result.Offset:X}; creating hook.");
             try
             {
                 _pitchDeltaHook = _hooks.CreateAsmHook(BuildPitchOverrideAssembly(), _imageBase + result.Offset, AsmHookBehaviour.ExecuteFirst);
@@ -118,7 +118,7 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
             }
             catch (Exception exception)
             {
-                _logger.WriteLine($"[P3R CamFix] Experimental free-camera pitch hook failed: {exception.Message}", System.Drawing.Color.Red);
+                _logger.WriteLine($"[P3R CamFix] Free-camera pitch hook failed: {exception.Message}", System.Drawing.Color.Red);
             }
         });
 
@@ -126,11 +126,11 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
         {
             if (!result.Found)
             {
-                _logger.WriteLine("[P3R CamFix] Experimental free-camera yaw-delta signature not found; raw mouse disabled.", System.Drawing.Color.Red);
+                _logger.WriteLine("[P3R CamFix] Free-camera yaw-delta signature not found; raw mouse disabled.", System.Drawing.Color.Red);
                 return;
             }
 
-            _logger.WriteLine($"[P3R CamFix] Experimental free-camera yaw-delta signature resolved at P3R.exe+0x{result.Offset:X}; creating hook.");
+            _logger.WriteLine($"[P3R CamFix] Free-camera yaw-delta signature resolved at P3R.exe+0x{result.Offset:X}; creating hook.");
             try
             {
                 _yawDeltaHook = _hooks.CreateAsmHook(BuildYawOverrideAssembly(), _imageBase + result.Offset, AsmHookBehaviour.ExecuteFirst);
@@ -140,19 +140,20 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
             }
             catch (Exception exception)
             {
-                _logger.WriteLine($"[P3R CamFix] Experimental free-camera yaw hook failed: {exception.Message}", System.Drawing.Color.Red);
+                _logger.WriteLine($"[P3R CamFix] Free-camera yaw hook failed: {exception.Message}", System.Drawing.Color.Red);
             }
         });
     }
 
     private void FreeCameraUpdate(nint behavior, float deltaTime)
     {
-        long enter = Stopwatch.GetTimestamp();
+        bool traceEnabled = _traceSlots != null;
+        long enter = traceEnabled ? Stopwatch.GetTimestamp() : 0;
         FreeCameraInputSnapshot input = _input.GetFreeCameraInputSnapshot();
         nint owner = behavior == 0 ? 0 : *(nint*)(behavior + 0xC8);
         bool ownerValid = owner != 0;
-        bool ownerBehaviorMatch = ownerValid && *(nint*)(owner + 0x270) == behavior;
-        byte ownerFlag258 = ownerValid ? *(byte*)(owner + 0x258) : (byte)0;
+        bool ownerBehaviorMatch = traceEnabled && ownerValid && *(nint*)(owner + 0x270) == behavior;
+        byte ownerFlag258 = traceEnabled && ownerValid ? *(byte*)(owner + 0x258) : (byte)0;
         float nativeX = ownerValid ? ReadFinite(owner + 0x25C) : 0f;
         float nativeY = ownerValid ? ReadFinite(owner + 0x260) : 0f;
         float nativeZ = ownerValid ? ReadFinite(owner + 0x264) : 0f;
@@ -163,25 +164,25 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
         float mousePitchDelta = 0f;
         float mouseYawDelta = 0f;
 
-        nint yawComponent = ownerValid ? *(nint*)(owner + 0x220) : 0;
-        nint pitchComponent = ownerValid ? *(nint*)(owner + 0x228) : 0;
-        float pitchBefore = ReadComponentPitch(pitchComponent);
-        float yawBefore = ReadComponentYaw(yawComponent);
-        float pitchSpeedBefore = behavior == 0 ? float.NaN : ReadFinite(behavior + 0x118);
-        float yawSpeedBefore = behavior == 0 ? float.NaN : ReadFinite(behavior + 0xFC);
+        nint yawComponent = traceEnabled && ownerValid ? *(nint*)(owner + 0x220) : 0;
+        nint pitchComponent = traceEnabled && ownerValid ? *(nint*)(owner + 0x228) : 0;
+        float pitchBefore = traceEnabled ? ReadComponentPitch(pitchComponent) : float.NaN;
+        float yawBefore = traceEnabled ? ReadComponentYaw(yawComponent) : float.NaN;
+        float pitchSpeedBefore = traceEnabled && behavior != 0 ? ReadFinite(behavior + 0x118) : float.NaN;
+        float yawSpeedBefore = traceEnabled && behavior != 0 ? ReadFinite(behavior + 0xFC) : float.NaN;
 
         bool nativeOwnership = HasNativeOwnership(ownerValid, input.OperationQpc,
             input.OperatorKeyState, deltaTime);
         bool hooksReady = Volatile.Read(ref _allHooksReady) != 0;
 
-        if (Mod.Configuration.EnableExperimentalFreeCamera && hooksReady && nativeOwnership)
+        if (Mod.Configuration.Enabled && Mod.Configuration.EnableFreeCameraFix && hooksReady && nativeOwnership)
         {
-            if (input.Device == 1 && Mod.Configuration.EnableFreeRawMouse)
+            if (input.Device == 1 && Mod.Configuration.EnableRawMouse)
             {
                 EnsureDirectAxisParams(behavior);
-                float yawSensitivity = Math.Clamp(Mod.Configuration.FreeMouseYawDegreesPerCount, 0f, 10f);
-                float pitchSensitivity = Math.Clamp(Mod.Configuration.FreeMousePitchDegreesPerCount, 0f, 10f);
-                float pitchDirection = Mod.Configuration.InvertFreeMouseY ? 1f : -1f;
+                float yawSensitivity = 0.04f * Math.Clamp(Mod.Configuration.MouseHorizontalSensitivityPercent, 10, 300) / 100f;
+                float pitchSensitivity = 0.03f * Math.Clamp(Mod.Configuration.MouseVerticalSensitivityPercent, 10, 300) / 100f;
+                float pitchDirection = Mod.Configuration.InvertMouseY ? 1f : -1f;
                 mouseYawDelta = input.MouseX * yawSensitivity;
                 mousePitchDelta = input.MouseY * pitchSensitivity * pitchDirection;
 
@@ -202,7 +203,7 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
             }
             else if (input.Device == 2 &&
                      input.DirectControllerAvailable &&
-                     Mod.Configuration.EnableFreeDirectController)
+                     Mod.Configuration.EnableDirectController)
             {
                 EnsureDirectAxisParams(behavior);
                 (appliedX, appliedY) = ApplyControllerCurve(input.StickX, input.StickY);
@@ -234,9 +235,9 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
             }
         }
 
-        long exit = Stopwatch.GetTimestamp();
-        if (_traceSlots != null)
+        if (traceEnabled)
         {
+            long exit = Stopwatch.GetTimestamp();
             ReserveTrace(new TraceSlot
             {
                 QpcEnter = enter,
@@ -283,14 +284,13 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
         float x = NormalizeStick(rawX);
         float y = NormalizeStick(rawY);
         float magnitude = MathF.Sqrt((x * x) + (y * y));
-        float deadzone = Math.Clamp(Mod.Configuration.FreeControllerDeadzone, 0f, 0.95f);
+        float deadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
         if (magnitude <= deadzone || magnitude <= float.Epsilon)
             return (0f, 0f);
 
         float normalizedMagnitude = Math.Clamp((magnitude - deadzone) / (1f - deadzone), 0f, 1f);
-        float exponent = Math.Clamp(Mod.Configuration.FreeControllerResponseExponent, 0.1f, 5f);
-        float sensitivity = Math.Clamp(Mod.Configuration.FreeControllerSensitivity, 0f, 4f);
-        float curvedMagnitude = MathF.Pow(normalizedMagnitude, exponent) * sensitivity;
+        float exponent = Mod.Configuration.GetGamepadCurveExponent();
+        float curvedMagnitude = MathF.Pow(normalizedMagnitude, exponent);
         float scale = curvedMagnitude / magnitude;
         return (Math.Clamp(x * scale, -1f, 1f), Math.Clamp(y * scale, -1f, 1f));
     }
@@ -310,10 +310,10 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
     private static void EnsureDirectAxisParams(nint behavior)
     {
         if (behavior == 0) return;
-        WriteAxisParams(behavior + 0xE8, Mod.Configuration.YawSpeed,
+        WriteAxisParams(behavior + 0xE8, Mod.Configuration.GamepadHorizontalSpeed,
             Mod.Configuration.YawAcceleration, Mod.Configuration.YawDeceleration,
             Mod.Configuration.YawPress, Mod.Configuration.YawRelease);
-        WriteAxisParams(behavior + 0x104, Mod.Configuration.PitchSpeed,
+        WriteAxisParams(behavior + 0x104, Mod.Configuration.GamepadVerticalSpeed,
             Mod.Configuration.PitchAcceleration, Mod.Configuration.PitchDeceleration,
             Mod.Configuration.PitchPress, Mod.Configuration.PitchRelease);
     }
@@ -361,13 +361,13 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
 
     private void UpdateReadyState(string hook)
     {
-        _logger.WriteLine($"[P3R CamFix] Experimental free-camera {hook} hook active.");
+        _logger.WriteLine($"[P3R CamFix] Free-camera {hook} hook active.");
         if (Volatile.Read(ref _freeUpdateReady) != 0 &&
             Volatile.Read(ref _pitchReady) != 0 &&
             Volatile.Read(ref _yawReady) != 0 &&
             Interlocked.Exchange(ref _allHooksReady, 1) == 0)
         {
-            _logger.WriteLine("[P3R CamFix] Experimental free-camera vNext iteration 3 (native ownership correction) is ready.");
+            _logger.WriteLine("[P3R CamFix] Free-camera replacement ready.");
         }
     }
 

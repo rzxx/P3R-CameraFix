@@ -1,108 +1,77 @@
 # Persona 3 Reload Camera Fix
 
-A Reloaded-II mod that removes the sluggish acceleration and smoothing from P3R's normal third-person camera.
+A Reloaded-II mod that replaces Persona 3 Reload's delayed, stick-like camera input with responsive mouse and gamepad controls.
 
-## Experimental spline/rail camera vNext
+## What it fixes
 
-The current development build contains an opt-in experimental path for the constrained spline/rail camera used in some field areas. Set `EnableExperimentalSplineCamera` to `true` and restart the game to test it.
+- Uses physical raw mouse movement for same-frame camera rotation instead of P3R's center-warped mouse-to-stick path.
+- Reads the right stick before the game's large upstream deadzone, then applies a small configurable radial deadzone and response curve.
+- Removes the free camera's acceleration, deceleration, and input delays while retaining native collision, pitch limits, and camera-follow behavior.
+- Replaces the spline/rail camera's 166.7 ms input interpolator and rigid 20-degrees-per-second follower.
+- Makes mouse angles persistent in spline cameras, with a predictable recenter only during authored rail motion or native input locks.
+- Preserves native dialogue, menu, loading, fade, and cursor ownership across camera and input-device transitions.
 
-- Replaces the native 166.7 ms target interpolation and its 0.05/0.10 retarget thresholds with same-tick output.
-- Reads the right stick directly from XInput, before the game's large upstream deadzone, then applies a configurable radial deadzone and response curve.
-- Accumulates physical raw mouse counts into a persistent angle bounded by the area's yaw/pitch margins. A stationary glance remains held; after a configurable idle delay, authored rail motion can trigger a smooth return to center.
-- Restores missing foreground raw-mouse registration when safe and falls back to the game's legacy mouse axis until raw packets resume after menus or device switches.
-- Rejects a raw packet only when it matches a recent large game-driven `SetCursorPos` warp; unmatched physical raw input remains uncapped and unsmoothed by this guard.
-- Uses direct zero-smoothing mouse response by default; optional nonzero mouse smoothing is explicitly latency-adding.
-- Obeys P3R's native `AFldOperator.KeyState` input-ownership gate, so dialogue, rail-transition, and paused-menu input cannot move or preload the camera; cursor requests never control camera input.
-- Restores P3R's intended center framing when native input ownership is lost, using a coordinated configurable-duration return instead of the game's rigid 20-degrees-per-second follower.
-- Suppresses P3R's erroneous arrow only for a short configurable cursor-only grace after native ownership loss; legitimate dialogue/menu cursor handling remains independent from camera input.
-- Prevents a recent stale legacy-axis sample from canceling an unfinished lock recenter when healthy raw input was just observed; genuine raw movement remains immediate.
-- Uses conservative default spline-mouse sensitivities of `0.04` horizontal and `0.03` vertical degrees per physical count.
-- Keeps all existing normal/free-camera settings unchanged.
-
-This is an experimental build for the currently validated `AFldCameraHitSpline` path. Literal fixed-camera locations have not yet been runtime-tested. To return to v1 behavior, set `EnableExperimentalSplineCamera` to `false` and restart the game.
-
-P3R has distinct free, spline/rail, and literal fixed field-camera paths. The stable v1 patch affects the free camera; the opt-in development path additionally targets the runtime-validated spline/rail camera. Literal fixed cameras remain untouched pending a confirmed test location.
-
-## Features
-
-- Removes gamepad camera smoothing/acceleration on the normal third-person camera
-- Camera responds instantly to stick input
-- Independent tunable values for yaw (horizontal) and pitch (vertical) camera movement
-- Configurable speed, acceleration, deceleration, and input delay parameters
-- All settings adjustable at runtime via Config.json
+P3R has separate free, spline/rail, and literal fixed field-camera implementations. This mod changes the free and spline paths. Literal fixed cameras remain native.
 
 ## Installation
 
-1. Download the latest release from [Releases](https://github.com/rzxx/P3R-CameraFix/releases).
-2. Drag and drop the release zip file onto the Reloaded-II window.
-3. Enable **P3R Camera Fix** in the Reloaded-II mod list.
-4. Launch Persona 3 Reload through Reloaded-II (do not launch directly through Steam).
+1. Download the latest package from [Releases](https://github.com/rzxx/P3R-CameraFix/releases).
+2. Drag the zip file onto Reloaded-II.
+3. Enable **P3R Camera Fix**.
+4. Launch Persona 3 Reload through Reloaded-II.
 
 ## Configuration
 
-Edit `Config.json` inside the mod's folder to adjust camera behavior. The following parameters are available:
+Select **P3R Camera Fix** in Reloaded-II and press **Configure Mod**. This opens a dedicated camera panel instead of Reloaded's generic property grid. The window follows the active Reloaded theme, while boolean settings use conventional pill switches with explicit labels and descriptions:
 
-| Parameter                | Default | Description                                                                  |
-| ------------------------ | ------- | ---------------------------------------------------------------------------- |
-| `YawSpeed`               | 125.0   | Horizontal camera rotation speed                                             |
-| `YawAcceleration`        | 0.0     | Time to reach full speed (seconds, 0 = instant)                              |
-| `YawDeceleration`        | 0.0     | Time to stop from full speed (seconds, 0 = instant)                          |
-| `YawPress`               | 0.0     | Delay before horizontal rotation starts (seconds)                            |
-| `YawRelease`             | 0.0     | Delay before horizontal deceleration kicks in (seconds)                      |
-| `PitchSpeed`             | 90.0    | Vertical camera rotation speed                                               |
-| `PitchAcceleration`      | 0.0     | Time to reach full speed (seconds, 0 = instant)                              |
-| `PitchDeceleration`      | 0.0     | Time to stop from full speed (seconds, 0 = instant)                          |
-| `PitchPress`             | 0.0     | Delay before vertical rotation starts (seconds)                              |
-| `PitchRelease`           | 0.0     | Delay before vertical deceleration kicks in (seconds)                        |
-| `CorrectionSpeed`        | 35.0    | Auto-correction rotation speed                                               |
-| `CorrectionAcceleration` | 0.5     | Auto-correction accel time (seconds, keep non-zero for smooth camera-follow) |
-| `CorrectionDeceleration` | 0.3     | Auto-correction decel time (seconds)                                         |
-| `CorrectionPress`        | 0.3     | Auto-correction press delay (seconds)                                        |
-| `CorrectionRelease`      | 0.0     | Auto-correction release delay (seconds)                                      |
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| Mouse Horizontal / Vertical Sensitivity | `100%` | Free-camera mouse base; exact integer sliders avoid noisy float values |
+| Gamepad Horizontal Speed | `165°/s` | Maximum free-camera yaw speed at full stick |
+| Gamepad Vertical Speed | `100°/s` | Maximum free-camera pitch speed at full stick |
+| Gamepad Deadzone | `3%` | Shared radial deadzone, adjustable from 0–50% |
+| Gamepad Response Curve | `Balanced` | Linear, Responsive, Balanced, Calm, Precision, or Custom power curve |
+| Spline Mouse / Gamepad Sensitivity Multiplier | `100%` | Relative to each free-camera base |
+| Invert Mouse Y | Off | Shared mouse inversion for both camera types |
 
-Values are applied live. Changes to Config.json take effect within ~15 seconds (on the next liveness check tick).
+The response graph shows the actual deadzone-remapped curve used by both camera implementations and updates live while configuring it. Choosing **Custom** adds an exponent slider from 1.00 (linear) to 3.00 (calmest near center).
 
-## How It Works
+The **Advanced** tab exposes input-source toggles, spline smoothing and recenter behavior, native camera parameters, and compatibility safeguards. The shipped defaults are the validated profile.
 
-The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the P3R executable, which provide access to all active Unreal Engine objects. It then operates in two phases:
+The **Debug** tab is only for diagnosing a reproducible problem. All traces are disabled by default; with debugging off, trace buffers, files, timers, cursor polling, and per-frame telemetry records are not created.
 
-1. **Scan phase** (every 5s): Walks the UObject array looking for `FldCameraBehaviorFree` instances. On the first successful match, it caches the class `FName` PoolLocations so all future class matching uses integer comparison instead of allocating managed strings. Once behaviors are found, values are written and the mod switches to the liveness phase.
+Most numerical settings update while the game is running. Settings described as restart-required install or remove native hooks and therefore take effect on the next launch.
 
-2. **Liveness phase** (every 15s): Performs a cheap integer-compare check on each cached behavior pointer (~10ns per pointer, zero allocations). If all pointers are still valid, no further work is done. If a pointer went stale (e.g. the player loaded a new map and the behavior was destroyed/recreated), the mod drops the cache and falls back to the scan phase.
+## Default gamepad response
 
-This design means the mod does **zero work** in steady state (camera behaviors alive, values already applied) and only does a full UObject scan when a behavior actually changes — typically once per map load. The game's camera values are written directly into each behavior object's `YawParam`, `PitchParam`, and `CorrectionParam` fields, overriding the game's default acceleration curve. Values persist until the behavior is destroyed.
+The default radial response is a conventional power curve: it keeps small corrections gentle and still reaches full speed at full stick, without hidden boosts or segmented damping. Reloaded's configuration button opens a dedicated camera panel with named presets, a Custom exponent, and a live graph of the resulting curve. Maximum horizontal free-camera speed defaults to 165 degrees per second, and the deadzone defaults to 3%, suitable for precise Hall-effect sticks while still tolerating a small amount of ordinary stick noise.
+
+## How it works
+
+The mod signature-scans the supported executable for the native free-camera update, spline interpolator, field-camera operation tick, and final view-transform path. Raw mouse deltas are applied at the native pitch/yaw result sites. Direct controller demand enters before P3R's upstream remap. Native camera ownership, collision, authored rail movement, fades, message UI, and common actor-based UI remain authoritative.
+
+The original behavior-object patch is applied only when a free-camera behavior is created or its settings change. Cached behavior liveness is checked periodically without managed allocations. Camera hooks do no trace construction or file I/O when debugging is disabled.
 
 **Target:** Persona 3 Reload (Steam/Windows), Unreal Engine 4.27.2, module `xrd777`
 
-## Building from Source
+## Building from source
 
-**Requirements:**
+Requirements:
 
-- .NET 8.0 SDK or later
-- Reloaded-II mod loader installed
+- .NET 8 SDK or later
+- Reloaded-II
 - Persona 3 Reload (Steam/Windows)
 
-**Steps:**
-
-1. Clone the repository:
-   ```
-   git clone https://github.com/rzxx/P3R-CameraFix
-   ```
-2. Open the solution in Visual Studio 2022 or build via command line:
-   ```
-   dotnet build
-   ```
-3. The compiled mod will be placed in the `publish` folder.
-
-**Dependencies:**
-
-- Reloaded.Memory.SigScan.ReloadedII (included with Reloaded-II)
+```text
+git clone https://github.com/rzxx/P3R-CameraFix
+dotnet build -c Release
+```
 
 ## Credits
 
-- [p3rpc.nativetypes](https://github.com/rirurin/p3rpc.nativetypes) by Rirurin - signature patterns
-- [p3rpc.essentials](https://github.com/AnimatedSwine37/p3rpc.essentials) by AnimatedSwine37 - mod template
-- [p5r-freecam](https://github.com/rirurin/p5r-freecam) by Rirurin - camera struct research
-- [UnrealEssentials](https://github.com/AnimatedSwine37/UnrealEssentials) by AnimatedSwine37 - UE4 modding framework
-- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) - Lua scripting and object dumping
-- [Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II) - mod loader framework
+- [p3rpc.nativetypes](https://github.com/rirurin/p3rpc.nativetypes) by Rirurin
+- [p3rpc.essentials](https://github.com/AnimatedSwine37/p3rpc.essentials) by AnimatedSwine37
+- [p5r-freecam](https://github.com/rirurin/p5r-freecam) by Rirurin
+- [UnrealEssentials](https://github.com/AnimatedSwine37/UnrealEssentials) by AnimatedSwine37
+- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS)
+- [Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II)

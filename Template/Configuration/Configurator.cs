@@ -44,6 +44,11 @@ public class Configurator : IConfiguratorV3
 
 public class ConfiguratorMixin : ConfiguratorMixinBase
 {
+    public override bool TryRunCustomConfiguration(Configurator configurator)
+    {
+        CameraConfigWindow.Show(configurator.GetConfiguration<Config>(0));
+        return true;
+    }
 }
 
 public class ConfiguratorMixinBase

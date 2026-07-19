@@ -40,7 +40,7 @@ internal sealed unsafe class RawInputTrace : IDisposable
     public RawInputTrace(ModContext context)
     {
         _logger = context.Logger;
-        int capacity = Math.Clamp(Mod.Configuration.CameraFilterTraceCapacity, 1024, 2_000_000);
+        int capacity = Math.Clamp(Mod.Configuration.TraceCapacity, 1024, 2_000_000);
         _slots = new TraceSlot[capacity];
 
         string modDirectory = context.ModLoader.GetDirectoryForModId(context.ModConfig.ModId);

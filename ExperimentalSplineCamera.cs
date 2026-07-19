@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 namespace p3rpc.camfix;
 
 /// <summary>
-/// Experimental replacement for both spline-camera filters: the 166.7 ms
+/// Responsive replacement for both spline-camera filters: the 166.7 ms
 /// input-target state machine and the subsequent constant 20-degrees/second
 /// vector follower. All subclass writes are guarded by the exact live
 /// AFldCameraHitSpline vtable for the supported executable.
@@ -28,6 +28,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const int FldCameraFreeVtableRva = 0x42901B0;
     private const int FldCameraHitBoxVtableRva = 0x42939A8;
     private const int SplineStateOffset = 0x2A8;
+    private const int FldOperatorStateFree = 1;
+    private const int FldOperatorStateMax = 15;
     private const float RailMotionHoldDuration = 0.25f;
     private const float RailPositionSpeedThreshold = 5.0f;
     private const float RailAngularSpeedThreshold = 0.5f;
@@ -49,6 +51,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private readonly Reloaded.Mod.Interfaces.ILogger _logger;
     private readonly Reloaded.Hooks.ReloadedII.Interfaces.IReloadedHooks _hooks;
     private readonly nint _imageBase;
+    private readonly bool _diagnosticsEnabled;
     private readonly CameraTransitionTrace? _transitionTrace;
     private readonly UnrealFadeProbe? _fadeProbe;
     private readonly IHook<PeekMessageWDelegate>? _peekMessageHook;
@@ -88,6 +91,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private long _lastNativeFadeActiveQpc;
     private long _lastAcceptedRawMouseQpc;
     private int _lastOperatorKeyState;
+    private int _lastOperatorState;
     private int _lastFreeOperatorKeyState;
     private int _lastFadeProbeStatus;
     private int _lastFadeMode;
@@ -160,6 +164,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private bool _splineUpdateHookReady;
     private bool _pendingTraceReady;
     private TraceSlot _pendingTrace;
+    private bool _pendingSplineFrameReady;
+    private PendingSplineFrame _pendingSplineFrame;
 
     private readonly TraceSlot[]? _traceSlots;
     private readonly StreamWriter? _traceWriter;
@@ -175,18 +181,20 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _logger = context.Logger;
         _hooks = context.Hooks!;
         _imageBase = imageBase;
+        _diagnosticsEnabled = Mod.Configuration.EnableCameraTransitionTrace ||
+                              Mod.Configuration.EnableSplineCameraTrace;
 
         if (Mod.Configuration.EnableCameraTransitionTrace ||
             (Mod.Configuration.EnableNativeFadeCursorGuard &&
-             (Mod.Configuration.EnableExperimentalFreeCamera || Mod.Configuration.EnableExperimentalSplineCamera)))
+             (Mod.Configuration.EnableFreeCameraFix || Mod.Configuration.EnableSplineCameraFix)))
             _fadeProbe = new UnrealFadeProbe(context, imageBase);
 
         if (Mod.Configuration.EnableCameraTransitionTrace)
             _transitionTrace = new CameraTransitionTrace(context, imageBase);
 
-        if (Mod.Configuration.EnableExperimentalSplineTrace)
+        if (Mod.Configuration.EnableSplineCameraTrace)
         {
-            int capacity = Math.Clamp(Mod.Configuration.CameraFilterTraceCapacity, 1024, 2_000_000);
+            int capacity = Math.Clamp(Mod.Configuration.TraceCapacity, 1024, 2_000_000);
             _traceSlots = new TraceSlot[capacity];
             string modDirectory = context.ModLoader.GetDirectoryForModId(context.ModConfig.ModId);
             string traceDirectory = Path.Combine(modDirectory, "ResearchTraces");
@@ -198,7 +206,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             _traceWriter.WriteLine("sequence,qpc,operation_sequence,operator_key_state,operator_state,operator_next_state,camera_lock,kernel_input,default_input_component,current_input_component,show_mouse_cursor,player_input,hit,device,device_switch,mouse_source,delta_time,mouse_x,mouse_y,raw_first_age_ms,raw_last_age_ms,operation_to_camera_ms,camera_input_frozen,native_disable_age_ms,recenter_reason,recenter_progress,recenter_cancelled,mouse_idle_seconds,rail_motion_active,rail_position_delta,rail_angle_delta,cursor_visible,cursor_x,cursor_y,cursor_handle,wm_setcursor_count,setcursor_count,setcursor_zero_count,setcursor_nonzero_count,setcursor_suppressed_count,last_setcursor_handle,last_setcursor_age_ms,showcursor_count,last_showcursor_show,last_showcursor_result,last_showcursor_age_ms,warp_rejected_count,warp_x,warp_y,warp_candidate_armed,warp_candidate_x,warp_candidate_y,warp_candidate_age_ms,stick_x,stick_y,native_x,native_y,margin_yaw,margin_pitch,desired_x,desired_y,output_before_x,output_before_y,output_after_x,output_after_y,degrees_before_pitch,degrees_before_yaw,degrees_after_pitch,degrees_after_yaw,view_x,view_y,view_z,view_angle_0,view_angle_1,view_angle_2,view_fov,rail_angle_0,rail_angle_1");
             _traceWriter.Flush();
             _traceFlushTimer = new Timer(_ => FlushTrace(), null, 500, 500);
-            _logger.WriteLine($"[P3R CamFix] Experimental spline trace active: {tracePath}");
+            _logger.WriteLine($"[P3R CamFix] Spline-camera debug trace active: {tracePath}");
         }
 
         try
@@ -210,7 +218,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
             _peekMessageHook = _hooks.CreateHook<PeekMessageWDelegate>(PeekMessageW, peekMessage);
             _peekMessageHook.Activate();
-            _logger.WriteLine("[P3R CamFix] Experimental spline raw-mouse capture active.");
+            _logger.WriteLine("[P3R CamFix] Raw-mouse camera input active.");
         }
         catch (Exception exception)
         {
@@ -226,7 +234,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
             _setCursorPosHook = _hooks.CreateHook<SetCursorPosDelegate>(SetCursorPos, setCursorPos);
             _setCursorPosHook.Activate();
-            _logger.WriteLine("[P3R CamFix] Experimental cursor-warp correlation active.");
+            _logger.WriteLine("[P3R CamFix] Cursor-warp rejection active.");
         }
         catch (Exception exception)
         {
@@ -237,15 +245,21 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         {
             nint user32 = Native.GetModuleHandleW("user32.dll");
             nint setCursor = user32 == 0 ? 0 : Native.GetProcAddress(user32, "SetCursor");
-            nint showCursor = user32 == 0 ? 0 : Native.GetProcAddress(user32, "ShowCursor");
-            if (setCursor == 0 || showCursor == 0)
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resolve user32 cursor-state APIs");
+            if (setCursor == 0)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resolve user32!SetCursor");
 
             _setCursorHook = _hooks.CreateHook<SetCursorDelegate>(SetCursor, setCursor);
-            _showCursorHook = _hooks.CreateHook<ShowCursorDelegate>(ShowCursor, showCursor);
             _setCursorHook.Activate();
-            _showCursorHook.Activate();
-            _logger.WriteLine("[P3R CamFix] Experimental cursor-state call tracing active.");
+            _logger.WriteLine("[P3R CamFix] Native cursor ownership guard active.");
+
+            if (_diagnosticsEnabled)
+            {
+                nint showCursor = Native.GetProcAddress(user32, "ShowCursor");
+                if (showCursor == 0)
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resolve user32!ShowCursor");
+                _showCursorHook = _hooks.CreateHook<ShowCursorDelegate>(ShowCursor, showCursor);
+                _showCursorHook.Activate();
+            }
         }
         catch (Exception exception)
         {
@@ -260,7 +274,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             {
                 _xInputGetStateHook = _hooks.CreateHook<XInputGetStateDelegate>(XInputGetState, getState);
                 _xInputGetStateHook.Activate();
-                _logger.WriteLine("[P3R CamFix] Experimental direct spline-controller capture active.");
+                _logger.WriteLine("[P3R CamFix] Direct gamepad camera input active.");
             }
             else
             {
@@ -276,7 +290,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         {
             if (!result.Found)
             {
-                _logger.WriteLine("[P3R CamFix] Experimental spline operation-tick signature not found; raw mouse input disabled.", System.Drawing.Color.Red);
+                _logger.WriteLine("[P3R CamFix] Field-camera operation signature not found; direct camera input disabled.", System.Drawing.Color.Red);
                 return;
             }
 
@@ -290,7 +304,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         {
             if (!result.Found)
             {
-                _logger.WriteLine("[P3R CamFix] Experimental spline interpolator signature not found; spline fix disabled.", System.Drawing.Color.Red);
+                _logger.WriteLine("[P3R CamFix] Spline-camera interpolator signature not found; spline fix disabled.", System.Drawing.Color.Red);
                 return;
             }
 
@@ -304,7 +318,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         {
             if (!result.Found)
             {
-                _logger.WriteLine("[P3R CamFix] Experimental spline-update signature not found; moving-idle recenter and final rail-transform fields unavailable.", System.Drawing.Color.Orange);
+                _logger.WriteLine("[P3R CamFix] Spline-camera update signature not found; moving-idle recenter unavailable.", System.Drawing.Color.Orange);
                 return;
             }
 
@@ -328,7 +342,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             return result;
 
         uint message = *(uint*)(messagePointer + 0x08);
-        if (message == WmSetCursor)
+        if (_diagnosticsEnabled && message == WmSetCursor)
             Interlocked.Increment(ref _pendingWmSetCursor);
         if (message != WmInput)
             return result;
@@ -345,9 +359,11 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         if (IsRecentCursorWarpPacket(x, y))
         {
             Interlocked.Increment(ref _pendingWarpRejected);
-            Volatile.Write(ref _pendingWarpX, x);
-            Volatile.Write(ref _pendingWarpY, y);
-            _logger.WriteLine($"[P3R CamFix] Rejected cursor-warp raw packet ({x}, {y}).");
+            if (_diagnosticsEnabled)
+            {
+                Volatile.Write(ref _pendingWarpX, x);
+                Volatile.Write(ref _pendingWarpY, y);
+            }
             return result;
         }
         if (x != 0) Interlocked.Add(ref _pendingMouseX, x);
@@ -391,18 +407,22 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         if (cursor != 0 && ShouldSuppressGameplayCursor(now))
         {
             appliedCursor = 0;
-            Interlocked.Increment(ref _pendingSetCursorSuppressedCalls);
+            if (_diagnosticsEnabled)
+                Interlocked.Increment(ref _pendingSetCursorSuppressedCalls);
         }
 
         nint result = _setCursorHook!.OriginalFunction(appliedCursor);
-        Interlocked.Increment(ref _pendingSetCursorCalls);
-        if (cursor == 0)
-            Interlocked.Increment(ref _pendingSetCursorZeroCalls);
-        else
-            Interlocked.Increment(ref _pendingSetCursorNonzeroCalls);
-        Volatile.Write(ref _lastSetCursorRequested, cursor);
-        Volatile.Write(ref _lastSetCursorApplied, appliedCursor);
-        Volatile.Write(ref _lastSetCursorQpc, now);
+        if (_diagnosticsEnabled)
+        {
+            Interlocked.Increment(ref _pendingSetCursorCalls);
+            if (cursor == 0)
+                Interlocked.Increment(ref _pendingSetCursorZeroCalls);
+            else
+                Interlocked.Increment(ref _pendingSetCursorNonzeroCalls);
+            Volatile.Write(ref _lastSetCursorRequested, cursor);
+            Volatile.Write(ref _lastSetCursorApplied, appliedCursor);
+            Volatile.Write(ref _lastSetCursorQpc, now);
+        }
         return result;
     }
 
@@ -466,18 +486,22 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _frameWarpRejected = Interlocked.Exchange(ref _pendingWarpRejected, 0);
         _frameWarpX = Interlocked.Exchange(ref _pendingWarpX, 0);
         _frameWarpY = Interlocked.Exchange(ref _pendingWarpY, 0);
-        _frameWmSetCursor = Interlocked.Exchange(ref _pendingWmSetCursor, 0);
-        _frameSetCursorCalls = Interlocked.Exchange(ref _pendingSetCursorCalls, 0);
-        _frameSetCursorZeroCalls = Interlocked.Exchange(ref _pendingSetCursorZeroCalls, 0);
-        _frameSetCursorNonzeroCalls = Interlocked.Exchange(ref _pendingSetCursorNonzeroCalls, 0);
-        _frameSetCursorSuppressedCalls = Interlocked.Exchange(ref _pendingSetCursorSuppressedCalls, 0);
-        _frameShowCursorCalls = Interlocked.Exchange(ref _pendingShowCursorCalls, 0);
+        if (_diagnosticsEnabled)
+        {
+            _frameWmSetCursor = Interlocked.Exchange(ref _pendingWmSetCursor, 0);
+            _frameSetCursorCalls = Interlocked.Exchange(ref _pendingSetCursorCalls, 0);
+            _frameSetCursorZeroCalls = Interlocked.Exchange(ref _pendingSetCursorZeroCalls, 0);
+            _frameSetCursorNonzeroCalls = Interlocked.Exchange(ref _pendingSetCursorNonzeroCalls, 0);
+            _frameSetCursorSuppressedCalls = Interlocked.Exchange(ref _pendingSetCursorSuppressedCalls, 0);
+            _frameShowCursorCalls = Interlocked.Exchange(ref _pendingShowCursorCalls, 0);
+        }
         _frameMouseSource = (_frameMouseX != 0 || _frameMouseY != 0)
             ? MouseSource.Raw
             : _frameWarpRejected != 0 ? MouseSource.WarpRejected : MouseSource.None;
-        CaptureCursorState();
+        if (_diagnosticsEnabled)
+            CaptureCursorState();
 
-        if (AnyExperimentalRawMouseEnabled() &&
+        if (AnyRawMouseEnabled() &&
             _operationSequence - Volatile.Read(ref _lastRawInputOperation) > 30 &&
             (_lastRegistrationCheckOperation == 0 || _operationSequence - _lastRegistrationCheckOperation >= 300))
         {
@@ -489,19 +513,17 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         InputDevice previous = (InputDevice)Volatile.Read(ref _activeDevice);
         InputDevice next = previous;
 
-        if (AnyExperimentalRawMouseEnabled() && (_frameMouseX != 0 || _frameMouseY != 0))
+        if (AnyRawMouseEnabled() && (_frameMouseX != 0 || _frameMouseY != 0))
         {
             next = InputDevice.Mouse;
         }
-        else if (AnyExperimentalDirectControllerEnabled() && _xInputGetStateHook != null)
+        else if (AnyDirectControllerEnabled() && _xInputGetStateHook != null)
         {
             float x = NormalizeStick(stickX);
             float y = NormalizeStick(stickY);
             float deltaX = NormalizeStick(stickX - _lastOperationStickX);
             float deltaY = NormalizeStick(stickY - _lastOperationStickY);
-            float configuredDeadzone = Mod.Configuration.EnableExperimentalFreeCamera
-                ? Math.Min(Mod.Configuration.SplineControllerDeadzone, Mod.Configuration.FreeControllerDeadzone)
-                : Mod.Configuration.SplineControllerDeadzone;
+            float configuredDeadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
             float switchThreshold = Math.Max(0.02f, Math.Clamp(configuredDeadzone, 0f, 0.95f) * 0.5f);
             bool deliberateChange = (deltaX * deltaX) + (deltaY * deltaY) >= 0.0001f;
             bool outsideSwitchZone = (x * x) + (y * y) >= switchThreshold * switchThreshold;
@@ -514,7 +536,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         if (next != previous)
         {
             Volatile.Write(ref _activeDevice, (int)next);
-            _logger.WriteLine($"[P3R CamFix] Experimental spline device: {previous} -> {next}.");
+            _logger.WriteLine($"[P3R CamFix] Camera input device: {previous} -> {next}.");
         }
         _lastOperationStickX = stickX;
         _lastOperationStickY = stickY;
@@ -608,7 +630,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     private void SplineInterpolator(nint state, nint input, float deltaTime)
     {
-        if (!Mod.Configuration.EnableExperimentalSplineCamera || !IsSplineState(state) || input == 0)
+        if (!Mod.Configuration.Enabled || !Mod.Configuration.EnableSplineCameraFix || !IsSplineState(state) || input == 0)
         {
             _splineInterpolatorHook!.OriginalFunction(state, input, deltaTime);
             return;
@@ -640,7 +662,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             Volatile.Write(ref _activeDevice, (int)device);
             _mouseBecameActive = true;
             _deviceChangedThisFrame = true;
-            _logger.WriteLine($"[P3R CamFix] Experimental spline device: {previous} -> Mouse (legacy-axis evidence).");
+            _logger.WriteLine($"[P3R CamFix] Camera input device: {previous} -> Mouse (legacy fallback).");
         }
 
         float desiredX;
@@ -676,15 +698,15 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         bool acceptedMouseMovement = rawMouseMovement || legacyMouseMovement;
 
         (float controllerDemandX, float controllerDemandY) =
-            device == InputDevice.Controller && Mod.Configuration.EnableSplineDirectController && _xInputGetStateHook != null
+            device == InputDevice.Controller && Mod.Configuration.EnableDirectController && _xInputGetStateHook != null
                 ? ApplyControllerCurve(Volatile.Read(ref _rightStickX), Volatile.Read(ref _rightStickY))
                 : (Math.Clamp(nativeX, -1f, 1f), Math.Clamp(nativeY, -1f, 1f));
-        bool acceptedCameraDemand = device == InputDevice.Mouse && Mod.Configuration.EnableSplineRawMouse
+        bool acceptedCameraDemand = device == InputDevice.Mouse && Mod.Configuration.EnableRawMouse
             ? acceptedMouseMovement
             : (controllerDemandX * controllerDemandX) + (controllerDemandY * controllerDemandY) > 0.000001f;
 
         _recenterCancelledThisFrame = false;
-        if (!cameraInputFrozen && device == InputDevice.Mouse && Mod.Configuration.EnableSplineRawMouse)
+        if (!cameraInputFrozen && device == InputDevice.Mouse && Mod.Configuration.EnableRawMouse)
         {
             if (_mouseBecameActive || acceptedMouseMovement)
                 _mouseIdleSeconds = 0f;
@@ -706,7 +728,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         if (!cameraInputFrozen &&
             _recenterReason == RecenterReason.None &&
             device == InputDevice.Mouse &&
-            Mod.Configuration.EnableSplineRawMouse &&
+            Mod.Configuration.EnableRawMouse &&
             Mod.Configuration.EnableSplineMouseIdleRecenter &&
             !acceptedMouseMovement &&
             _mouseIdleSeconds >= idleDelay &&
@@ -736,14 +758,15 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             outputX = outputBeforeX;
             outputY = outputBeforeY;
         }
-        else if (device == InputDevice.Mouse && Mod.Configuration.EnableSplineRawMouse)
+        else if (device == InputDevice.Mouse && Mod.Configuration.EnableRawMouse)
         {
             desiredX = (_mouseBecameActive || _recenterCancelledThisFrame) ? outputBeforeX : ClampFinite(*(float*)(state + 0x18));
             desiredY = (_mouseBecameActive || _recenterCancelledThisFrame) ? outputBeforeY : ClampFinite(*(float*)(state + 0x1C));
-            float yawSensitivity = Math.Clamp(Mod.Configuration.SplineMouseYawDegreesPerCount, 0f, 10f);
-            float pitchSensitivity = Math.Clamp(Mod.Configuration.SplineMousePitchDegreesPerCount, 0f, 10f);
+            float splineMouseScale = Math.Clamp(Mod.Configuration.SplineMouseSensitivityPercent, 0, 200) / 100f;
+            float yawSensitivity = 0.04f * Math.Clamp(Mod.Configuration.MouseHorizontalSensitivityPercent, 10, 300) / 100f * splineMouseScale;
+            float pitchSensitivity = 0.03f * Math.Clamp(Mod.Configuration.MouseVerticalSensitivityPercent, 10, 300) / 100f * splineMouseScale;
             desiredX = Math.Clamp(desiredX + (_frameMouseX * yawSensitivity / marginYaw), -1f, 1f);
-            float direction = Mod.Configuration.InvertSplineMouseY ? 1f : -1f;
+            float direction = Mod.Configuration.InvertMouseY ? 1f : -1f;
             desiredY = Math.Clamp(desiredY + (_frameMouseY * pitchSensitivity * direction / marginPitch), -1f, 1f);
 
             if (_frameMouseSource == MouseSource.Legacy)
@@ -788,6 +811,21 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         // Seed its current vector to the same value so it contributes no second
         // filter; our single FPS-independent response above owns the motion.
         WriteVector(hit + 0x29C, 0f, outputY * marginPitch, outputX * marginYaw);
+
+        if (_splineUpdateHookReady)
+        {
+            _pendingSplineFrame = new PendingSplineFrame
+            {
+                Hit = hit,
+                OperationSequence = _operationSequence,
+                DegreesAfterYaw = outputX * marginYaw,
+                DegreesAfterPitch = outputY * marginPitch,
+            };
+            _pendingSplineFrameReady = true;
+        }
+
+        if (_traceSlots == null)
+            return;
 
         long traceQpc = Stopwatch.GetTimestamp();
         var trace = new TraceSlot
@@ -886,8 +924,24 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     {
         // A completed call without an interpolator record must not inherit a
         // record from an earlier frame or camera state.
+        _pendingSplineFrameReady = false;
         _pendingTraceReady = false;
         byte result = _splineUpdateHook!.OriginalFunction(hit, deltaTime, sourceTransform, outputTransform);
+
+        bool matchingFrame = _pendingSplineFrameReady &&
+                             _pendingSplineFrame.Hit == hit &&
+                             _pendingSplineFrame.OperationSequence == _operationSequence;
+        if (matchingFrame && outputTransform != 0)
+        {
+            float viewX = ReadFloat(outputTransform, 0x00);
+            float viewY = ReadFloat(outputTransform, 0x04);
+            float viewZ = ReadFloat(outputTransform, 0x08);
+            float viewAngle0 = ReadFloat(outputTransform, 0x0C);
+            float viewAngle1 = ReadFloat(outputTransform, 0x10);
+            float railAngle0 = viewAngle0 - _pendingSplineFrame.DegreesAfterYaw;
+            float railAngle1 = viewAngle1 - _pendingSplineFrame.DegreesAfterPitch;
+            UpdateRailMotion(hit, deltaTime, viewX, viewY, viewZ, railAngle0, railAngle1);
+        }
 
         if (_pendingTraceReady && _pendingTrace.Hit == hit && _pendingTrace.OperationSequence == _operationSequence)
         {
@@ -907,19 +961,12 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
                 // yields the rail/player transform before user offset.
                 trace.RailAngle0 = trace.ViewAngle0 - trace.DegreesAfterYaw;
                 trace.RailAngle1 = trace.ViewAngle1 - trace.DegreesAfterPitch;
-                UpdateRailMotion(
-                    hit,
-                    deltaTime,
-                    trace.ViewX,
-                    trace.ViewY,
-                    trace.ViewZ,
-                    trace.RailAngle0,
-                    trace.RailAngle1);
                 trace.RailPositionDelta = _lastRailPositionDelta;
                 trace.RailAngleDelta = _lastRailAngleDelta;
             }
             ReserveTrace(trace);
         }
+        _pendingSplineFrameReady = false;
         _pendingTraceReady = false;
         return result;
     }
@@ -1062,16 +1109,18 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         float x = NormalizeStick(rawX);
         float y = NormalizeStick(rawY);
         float magnitude = MathF.Sqrt((x * x) + (y * y));
-        float deadzone = Math.Clamp(Mod.Configuration.SplineControllerDeadzone, 0f, 0.95f);
+        float deadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
         if (magnitude <= deadzone || magnitude <= float.Epsilon)
             return (0f, 0f);
 
         float normalizedMagnitude = Math.Clamp((magnitude - deadzone) / (1f - deadzone), 0f, 1f);
-        float exponent = Math.Clamp(Mod.Configuration.SplineControllerResponseExponent, 0.1f, 5f);
-        float sensitivity = Math.Clamp(Mod.Configuration.SplineControllerSensitivity, 0f, 4f);
-        float curvedMagnitude = MathF.Pow(normalizedMagnitude, exponent) * sensitivity;
+        float exponent = Mod.Configuration.GetGamepadCurveExponent();
+        float curvedMagnitude = MathF.Pow(normalizedMagnitude, exponent);
         float scale = curvedMagnitude / magnitude;
-        return (Math.Clamp(x * scale, -1f, 1f), Math.Clamp(y * scale, -1f, 1f));
+        float cameraScale = Math.Clamp(Mod.Configuration.SplineGamepadSensitivityPercent, 0, 200) / 100f;
+        float yawScale = cameraScale * Math.Clamp(Mod.Configuration.GamepadHorizontalSpeed / 165f, 0f, 4f);
+        float pitchScale = cameraScale * Math.Clamp(Mod.Configuration.GamepadVerticalSpeed / 100f, 0f, 4f);
+        return (Math.Clamp(x * scale * yawScale, -1f, 1f), Math.Clamp(y * scale * pitchScale, -1f, 1f));
     }
 
     private bool IsSplineState(nint state)
@@ -1085,7 +1134,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     {
         float x = NormalizeStick(Volatile.Read(ref _rightStickX));
         float y = NormalizeStick(Volatile.Read(ref _rightStickY));
-        float threshold = Math.Max(0.02f, Math.Clamp(Mod.Configuration.SplineControllerDeadzone, 0f, 0.95f) * 0.5f);
+        float threshold = Math.Max(0.02f, (Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f) * 0.5f);
         return (x * x) + (y * y) < threshold * threshold;
     }
 
@@ -1210,13 +1259,13 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private static float ClampNative(float value) => float.IsFinite(value) ? Math.Clamp(value, -2f, 2f) : 0f;
     private static float NormalizeStick(int value) => value >= 0 ? Math.Min(value, 32767) / 32767f : Math.Max(value, -32768) / 32768f;
 
-    private static bool AnyExperimentalRawMouseEnabled() =>
-        (Mod.Configuration.EnableExperimentalSplineCamera && Mod.Configuration.EnableSplineRawMouse) ||
-        (Mod.Configuration.EnableExperimentalFreeCamera && Mod.Configuration.EnableFreeRawMouse);
+    private static bool AnyRawMouseEnabled() =>
+        Mod.Configuration.Enabled && Mod.Configuration.EnableRawMouse &&
+        (Mod.Configuration.EnableSplineCameraFix || Mod.Configuration.EnableFreeCameraFix);
 
-    private static bool AnyExperimentalDirectControllerEnabled() =>
-        (Mod.Configuration.EnableExperimentalSplineCamera && Mod.Configuration.EnableSplineDirectController) ||
-        (Mod.Configuration.EnableExperimentalFreeCamera && Mod.Configuration.EnableFreeDirectController);
+    private static bool AnyDirectControllerEnabled() =>
+        Mod.Configuration.Enabled && Mod.Configuration.EnableDirectController &&
+        (Mod.Configuration.EnableSplineCameraFix || Mod.Configuration.EnableFreeCameraFix);
 
     internal FreeCameraInputSnapshot GetFreeCameraInputSnapshot() => new(
         _operationSequence,
@@ -1351,9 +1400,9 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     private void LogReadyState(string hook)
     {
-        _logger.WriteLine($"[P3R CamFix] Experimental spline {hook} hook active.");
+        _logger.WriteLine($"[P3R CamFix] Spline-camera {hook} hook active.");
         if (_operationHookReady && _interpolatorHookReady && _splineUpdateHookReady)
-            _logger.WriteLine("[P3R CamFix] Experimental spline-camera vNext iteration 12 (recenter edge hardening) is ready.");
+            _logger.WriteLine("[P3R CamFix] Spline-camera replacement ready.");
     }
 
     public void Dispose()
@@ -1404,6 +1453,13 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private enum MouseSource { None, Raw, Legacy, LegacyDeferred, WarpRejected }
     private enum RecenterReason { None, NativeLock, MovingIdle }
 
+    private struct PendingSplineFrame
+    {
+        public int OperationSequence;
+        public nint Hit;
+        public float DegreesAfterPitch, DegreesAfterYaw;
+    }
+
     private struct TraceSlot
     {
         public int Ready, Sequence, OperationSequence, DeviceSwitch;
@@ -1449,6 +1505,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         if (previousKeyState == 3 && _frameOperatorKeyState != 3)
             Volatile.Write(ref _lastNativeInputDisabledQpc, ownershipQpc);
         Volatile.Write(ref _lastOperatorKeyState, _frameOperatorKeyState);
+        Volatile.Write(ref _lastOperatorState, _frameOperatorState);
         Volatile.Write(ref _lastNativeOwnershipQpc, ownershipQpc);
         if (_frameOperatorKeyState == 3)
             Volatile.Write(ref _splineInputEnabledSinceResume, 1);
@@ -1553,20 +1610,36 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     private bool ShouldSuppressGameplayCursor(long now)
     {
+        if (!Mod.Configuration.Enabled)
+            return false;
+
         int liveFadeMode = 0;
         bool haveLiveFadeMode = _fadeProbe?.TryReadLiveMode(out liveFadeMode) == true;
-        bool liveMessageCursorOwner = false;
-        bool liveActorUiCursorOwner = false;
-        _fadeProbe?.TryReadLiveMessageCursorOwner(out liveMessageCursorOwner);
-        _fadeProbe?.TryReadLiveActorUiCursorOwner(out liveActorUiCursorOwner);
-        bool liveNativeUiCursorOwner = liveMessageCursorOwner || liveActorUiCursorOwner;
+        bool fadeTransactionActive = Volatile.Read(ref _nativeFadeTransactionActive) != 0;
         if (ShouldSuppressNativeFadeTransactionCursor(
             Mod.Configuration.EnableNativeFadeCursorGuard,
             Volatile.Read(ref _lastFadeProbeStatus),
-            Volatile.Read(ref _nativeFadeTransactionActive) != 0,
+            fadeTransactionActive,
             haveLiveFadeMode,
             liveFadeMode))
             return true;
+
+        // Message/UI actor traversal is only relevant to a completed fade
+        // transaction hold. Ordinary gameplay and active fades never pay for it.
+        bool liveNativeUiCursorOwner = false;
+        if (fadeTransactionActive)
+        {
+            bool liveMessageCursorOwner = false;
+            bool liveActorUiCursorOwner = false;
+            _fadeProbe?.TryReadLiveMessageCursorOwner(out liveMessageCursorOwner);
+            _fadeProbe?.TryReadLiveActorUiCursorOwner(out liveActorUiCursorOwner);
+            bool liveOperationCursorOwner = HasNativeOperationCursorOwner(
+                now,
+                Volatile.Read(ref _lastNativeOwnershipQpc),
+                Volatile.Read(ref _lastOperatorState));
+            liveNativeUiCursorOwner = liveMessageCursorOwner || liveActorUiCursorOwner ||
+                                      liveOperationCursorOwner;
+        }
 
         return ShouldSuppressSplineGameplayCursor(now, liveNativeUiCursorOwner) ||
                ShouldSuppressFreeFadeCursor(now, liveNativeUiCursorOwner);
@@ -1577,6 +1650,22 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         bool liveFadeModeAvailable, int liveFadeMode) =>
         enabled && fadeProbeStatus == 2 && transactionActive &&
         liveFadeModeAvailable && liveFadeMode != 0;
+
+    private static bool HasNativeOperationCursorOwner(
+        long now, long lastOwnershipQpc, int operatorState)
+    {
+        // EFldOperatorState::Free is ordinary field gameplay and the state used
+        // by loading holds. Every higher in-range value is a named native modal
+        // operation (menus, map, battle, event, save, and so on). This method is
+        // consulted only for a nonzero SetCursor request after the active fade
+        // has ended, so it cannot create a cursor by itself. Require a fresh
+        // operation tick to avoid carrying a modal state into title teardown.
+        if (lastOwnershipQpc == 0 || now < lastOwnershipQpc ||
+            now - lastOwnershipQpc > Stopwatch.Frequency / 4)
+            return false;
+
+        return operatorState > FldOperatorStateFree && operatorState < FldOperatorStateMax;
+    }
 
     private bool ShouldSuppressSplineGameplayCursor(long now, bool nativeUiCursorOwner)
     {

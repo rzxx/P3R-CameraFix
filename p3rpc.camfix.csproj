@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <LangVersion>10.0</LangVersion>
@@ -16,6 +17,8 @@
     <None Remove="Preview.png" />
     <!-- Research utilities are independent console projects. -->
     <Compile Remove="Research\**\*.cs" />
+    <Page Remove="Research\**\*.xaml" />
+    <Resource Remove="Research\**\*.xaml" />
   </ItemGroup>
 
   <ItemGroup>
