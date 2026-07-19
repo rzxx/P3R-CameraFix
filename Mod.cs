@@ -155,32 +155,9 @@ public class Mod : ModBase
 
     private static unsafe nint ResolveRipRelative(nint instrAddr)
     {
-        // For `mov rax, [rip+disp32]` or `lea rax, [rip+disp32]`:
-        // The displacement is a 32-bit signed int at offset +3 (after 48 8B 05 / 48 8D 05)
-        // But the sig might match at different instruction encodings.
-        // We scan the first few bytes for the pattern and find the disp32.
-        // Common: 48 8B 05 XX XX XX XX (7 bytes, disp at +3)
-        //         4C 8D 05 XX XX XX XX (7 bytes, disp at +3)
-        int disp;
-        byte b0 = *(byte*)instrAddr;
-        byte b1 = *(byte*)(instrAddr + 1);
-        byte b2 = *(byte*)(instrAddr + 2);
-
-        if ((b0 == 0x48 || b0 == 0x4C) && (b1 == 0x8B || b1 == 0x8D) && b2 == 0x05)
-        {
-            disp = *(int*)(instrAddr + 3);
-            return instrAddr + 7 + disp;
-        }
-
-        // Fallback: try 48 8D 0D (lea rcx)
-        if (b0 == 0x48 && b1 == 0x8D && b2 == 0x0D)
-        {
-            disp = *(int*)(instrAddr + 3);
-            return instrAddr + 7 + disp;
-        }
-
-        // Another fallback: just try offset +3
-        disp = *(int*)(instrAddr + 3);
+        // Both exact signatures begin with a seven-byte RIP-relative
+        // instruction whose disp32 starts at +3.
+        int disp = *(int*)(instrAddr + 3);
         return instrAddr + 7 + disp;
     }
 

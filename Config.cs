@@ -1,11 +1,10 @@
 using p3rpc.camfix.Template.Configuration;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
-using System.Text.Json.Serialization;
 
 namespace p3rpc.camfix.Configuration;
 
-public class Config : Configurable<Config>, IJsonOnDeserialized
+public class Config : Configurable<Config>
 {
     // The numbered categories keep the normal testing controls first in
     // Reloaded-II while leaving implementation details available to power users.
@@ -88,17 +87,29 @@ public class Config : Configurable<Config>, IJsonOnDeserialized
     [DefaultValue(3)]
     public int GamepadDeadzonePercent { get; set; } = 3;
 
-    [DisplayName("Gamepad Response Curve")]
+    [DisplayName("Camera Response Curve")]
     [Category("02 - Advanced Input")]
-    [Description("An ordinary radial power curve. Every preset reaches full output at full stick; calmer curves reserve more range for precise corrections.")]
-    [DefaultValue(GamepadCurvePreset.Balanced)]
-    public GamepadCurvePreset GamepadResponseCurve { get; set; } = GamepadCurvePreset.Balanced;
+    [Description("How right-stick travel becomes camera turn demand. Standard is recommended; Comfort is calmer; Direct is linear; Dynamic combines a calm center with faster large turns.")]
+    [DefaultValue(CameraResponseCurvePreset.Standard)]
+    public CameraResponseCurvePreset CameraResponseCurve { get; set; } = CameraResponseCurvePreset.Standard;
 
-    [DisplayName("Custom Curve Exponent")]
+    [DisplayName("Custom Camera Curve Exponent")]
     [Category("02 - Advanced Input")]
-    [Description("Power exponent used only when Gamepad Response Curve is Custom. 1 is linear; higher values reserve more stick range for precise corrections.")]
+    [Description("Power exponent used only when Camera Response Curve is Custom. 1 is linear; higher values reserve more stick range for precise camera corrections.")]
     [DefaultValue(1.7f)]
-    public float CustomGamepadCurveExponent { get; set; } = 1.7f;
+    public float CustomCameraCurveExponent { get; set; } = 1.7f;
+
+    [DisplayName("Custom Camera Low-End Calm (Toe)")]
+    [Category("02 - Advanced Input")]
+    [Description("Additional low-end shaping used only by the Custom curve. Higher values keep small stick movement calmer without increasing the deadzone.")]
+    [DefaultValue(0)]
+    public int CustomCameraCurveToePercent { get; set; }
+
+    [DisplayName("Custom Camera High-End Reach (Shoulder)")]
+    [Category("02 - Advanced Input")]
+    [Description("Additional high-end shaping used only by the Custom curve. Higher values pull large stick movement toward full output sooner.")]
+    [DefaultValue(0)]
+    public int CustomCameraCurveShoulderPercent { get; set; }
 
     [DisplayName("Spline Small-Movement Smoothing")]
     [Category("03 - Advanced Spline Camera")]
@@ -238,60 +249,6 @@ public class Config : Configurable<Config>, IJsonOnDeserialized
     [DefaultValue(0.0f)]
     public float CorrectionRelease { get; set; } = 0.0f;
 
-    [DisplayName("Reject Game Cursor-Warp Packets")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Rejects raw mouse packets only when they match a recent large game-driven SetCursorPos warp.")]
-    [DefaultValue(true)]
-    public bool EnableSplineCursorWarpRejection { get; set; } = true;
-
-    [DisplayName("Cursor-Warp Detection Threshold")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Minimum game cursor-warp delta eligible for raw-packet matching. Default: 128 counts.")]
-    [DefaultValue(128)]
-    public int SplineCursorWarpMinimumCounts { get; set; } = 128;
-
-    [DisplayName("Cursor-Warp Match Tolerance")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Per-axis tolerance when matching a raw packet to a recent game cursor warp. Default: 8 counts.")]
-    [DefaultValue(8)]
-    public int SplineCursorWarpMatchTolerance { get; set; } = 8;
-
-    [DisplayName("Hide Erroneous Gameplay Cursor")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Suppresses P3R's erroneous Windows arrow during active spline gameplay while retaining native dialogue and UI ownership.")]
-    [DefaultValue(true)]
-    public bool EnableSplineGameplayCursorGuard { get; set; } = true;
-
-    [DisplayName("Hide Cursor During Native Fades")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Uses P3R's native fade and UI ownership state to suppress transition cursor flashes in free and spline cameras. Restart required.")]
-    [DefaultValue(true)]
-    public bool EnableNativeFadeCursorGuard { get; set; } = true;
-
-    [DisplayName("Native Fade Boundary Bridge")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Bridges measured operation-sampling gaps immediately around native fades. Cursor-only. Default: 0.075 seconds.")]
-    [DefaultValue(0.075f)]
-    public float NativeFadeCursorBridgeSeconds { get; set; } = 0.075f;
-
-    [DisplayName("Enable Legacy Mouse Fallback")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Uses P3R's legacy mouse axis temporarily if raw input is unavailable after a menu or device switch.")]
-    [DefaultValue(true)]
-    public bool EnableSplineLegacyMouseFallback { get; set; } = true;
-
-    [DisplayName("Legacy Mouse Horizontal Speed")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Fallback-only horizontal angular speed. Default: 150 degrees per second.")]
-    [DefaultValue(150.0f)]
-    public float SplineLegacyMouseYawSpeed { get; set; } = 150.0f;
-
-    [DisplayName("Legacy Mouse Vertical Speed")]
-    [Category("05 - Advanced Compatibility")]
-    [Description("Fallback-only vertical angular speed. Default: 90 degrees per second.")]
-    [DefaultValue(90.0f)]
-    public float SplineLegacyMousePitchSpeed { get; set; } = 90.0f;
-
     [DisplayName("Trace Free Camera")]
     [Category("99 - Debug")]
     [Description("Writes high-volume free-camera telemetry. Restart required. Leave disabled for normal play.")]
@@ -318,7 +275,7 @@ public class Config : Configurable<Config>, IJsonOnDeserialized
 
     [DisplayName("Trace Raw Input")]
     [Category("99 - Debug")]
-    [Description("Writes raw/legacy mouse, cursor warp, device registration, and XInput telemetry. Restart required.")]
+    [Description("Writes raw and native mouse input, cursor warp, device registration, and XInput telemetry. Restart required.")]
     [DefaultValue(false)]
     public bool EnableRawInputTrace { get; set; } = false;
 
@@ -334,133 +291,69 @@ public class Config : Configurable<Config>, IJsonOnDeserialized
     [DefaultValue(262144)]
     public int TraceCapacity { get; set; } = 262144;
 
-    // Older builds used raw floating-point implementation units. Nullable
-    // aliases preserve them during deserialization and disappear on next save.
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? FreeMouseYawDegreesPerCount { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? FreeMousePitchDegreesPerCount { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? YawSpeed { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? PitchSpeed { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? MouseHorizontalSensitivity { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? MouseVerticalSensitivity { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? GamepadHorizontalSensitivity { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? GamepadVerticalSensitivity { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? SplineMouseSensitivityMultiplier { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? SplineControllerSensitivityMultiplier { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? ControllerDeadzone { get; set; }
-
-    [Browsable(false)]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public float? ControllerResponseExponent { get; set; }
-
-    public float GetGamepadCurveExponent() => GamepadResponseCurve switch
+    public float GetCameraCurveExponent() => CameraResponseCurve switch
     {
-        GamepadCurvePreset.Linear => 1.0f,
-        GamepadCurvePreset.Responsive => 1.35f,
-        GamepadCurvePreset.Calm => 2.0f,
-        GamepadCurvePreset.Precision => 2.4f,
-        GamepadCurvePreset.Custom => Math.Clamp(CustomGamepadCurveExponent, 1f, 3f),
-        _ => 1.7f,
+        CameraResponseCurvePreset.Direct => 1.0f,
+        CameraResponseCurvePreset.Comfort => 1.7f,
+        CameraResponseCurvePreset.Dynamic => 1.15f,
+        CameraResponseCurvePreset.Custom => Math.Clamp(CustomCameraCurveExponent, 1f, 3f),
+        _ => 1.35f,
     };
 
-    public void OnDeserialized()
+    public float GetCameraCurveToeStrength() => CameraResponseCurve switch
     {
-        float? mouseYaw = MouseHorizontalSensitivity ?? FreeMouseYawDegreesPerCount;
-        float? mousePitch = MouseVerticalSensitivity ?? FreeMousePitchDegreesPerCount;
-        float? gamepadYaw = GamepadHorizontalSensitivity ?? YawSpeed;
-        float? gamepadPitch = GamepadVerticalSensitivity ?? PitchSpeed;
-        if (mouseYaw is float yawValue)
-            MouseHorizontalSensitivityPercent = Math.Clamp((int)MathF.Round(yawValue / 0.04f * 100f), 10, 300);
-        if (mousePitch is float pitchValue)
-            MouseVerticalSensitivityPercent = Math.Clamp((int)MathF.Round(pitchValue / 0.03f * 100f), 10, 300);
-        if (gamepadYaw is float gamepadYawValue)
-            GamepadHorizontalSpeed = Math.Clamp((int)MathF.Round(gamepadYawValue), 30, 300);
-        if (gamepadPitch is float gamepadPitchValue)
-            GamepadVerticalSpeed = Math.Clamp((int)MathF.Round(gamepadPitchValue), 30, 200);
-        if (SplineMouseSensitivityMultiplier is float splineMouse)
-            SplineMouseSensitivityPercent = Math.Clamp((int)MathF.Round(splineMouse * 100f), 0, 200);
-        if (SplineControllerSensitivityMultiplier is float splineGamepad)
-            SplineGamepadSensitivityPercent = Math.Clamp((int)MathF.Round(splineGamepad * 100f), 0, 200);
-        if (ControllerDeadzone is float deadzone)
-            GamepadDeadzonePercent = Math.Clamp((int)MathF.Round(deadzone * 100f), 0, 50);
-        if (ControllerResponseExponent is float exponent)
-            GamepadResponseCurve = ClosestCurvePreset(exponent);
+        CameraResponseCurvePreset.Comfort => 0.1f,
+        CameraResponseCurvePreset.Dynamic => 0.4f,
+        CameraResponseCurvePreset.Custom => Math.Clamp(CustomCameraCurveToePercent, 0, 100) / 100f,
+        _ => 0f,
+    };
 
-        FreeMouseYawDegreesPerCount = null;
-        FreeMousePitchDegreesPerCount = null;
-        YawSpeed = null;
-        PitchSpeed = null;
-        MouseHorizontalSensitivity = null;
-        MouseVerticalSensitivity = null;
-        GamepadHorizontalSensitivity = null;
-        GamepadVerticalSensitivity = null;
-        SplineMouseSensitivityMultiplier = null;
-        SplineControllerSensitivityMultiplier = null;
-        ControllerDeadzone = null;
-        ControllerResponseExponent = null;
-    }
-
-    private static GamepadCurvePreset ClosestCurvePreset(float exponent)
+    public float GetCameraCurveShoulderStrength() => CameraResponseCurve switch
     {
-        (GamepadCurvePreset Preset, float Exponent)[] presets =
-        {
-            (GamepadCurvePreset.Linear, 1.0f),
-            (GamepadCurvePreset.Responsive, 1.35f),
-            (GamepadCurvePreset.Balanced, 1.7f),
-            (GamepadCurvePreset.Calm, 2.0f),
-            (GamepadCurvePreset.Precision, 2.4f),
-        };
-        return presets.MinBy(item => Math.Abs(item.Exponent - exponent)).Preset;
+        CameraResponseCurvePreset.Comfort => 0.25f,
+        CameraResponseCurvePreset.Dynamic => 0.4f,
+        CameraResponseCurvePreset.Custom => Math.Clamp(CustomCameraCurveShoulderPercent, 0, 100) / 100f,
+        _ => 0f,
+    };
+
+    public float ApplyCameraResponseCurve(float normalizedMagnitude) => ApplyCameraResponseCurve(
+        normalizedMagnitude,
+        GetCameraCurveExponent(),
+        GetCameraCurveToeStrength(),
+        GetCameraCurveShoulderStrength());
+
+    internal static float ApplyCameraResponseCurve(
+        float normalizedMagnitude, float exponent, float toeStrength, float shoulderStrength)
+    {
+        float input = Math.Clamp(normalizedMagnitude, 0f, 1f);
+        float output = MathF.Pow(input, Math.Clamp(exponent, 1f, 3f));
+        float toe = Math.Clamp(toeStrength, 0f, 1f);
+        float shoulder = Math.Clamp(shoulderStrength, 0f, 1f);
+
+        // Monotonic endpoint shaping. The cubic weights localize toe influence
+        // near zero and shoulder influence near one while preserving exact
+        // endpoints. Each transform has a non-negative derivative for strengths
+        // in [0, 1], so their composition cannot create reversals.
+        float inverse = 1f - output;
+        output -= toe * output * inverse * inverse * inverse;
+        output += shoulder * output * output * output * (1f - output);
+        return Math.Clamp(output, 0f, 1f);
     }
 }
 
-public enum GamepadCurvePreset
+public enum CameraResponseCurvePreset
 {
-    [Display(Name = "Linear")]
-    Linear,
+    [Display(Name = "Standard (Recommended)")]
+    Standard,
 
-    [Display(Name = "Responsive")]
-    Responsive,
+    [Display(Name = "Comfort")]
+    Comfort,
 
-    [Display(Name = "Balanced (Recommended)")]
-    Balanced,
+    [Display(Name = "Direct (Linear)")]
+    Direct,
 
-    [Display(Name = "Calm")]
-    Calm,
-
-    [Display(Name = "Precision")]
-    Precision,
+    [Display(Name = "Dynamic (S-Curve)")]
+    Dynamic,
 
     [Display(Name = "Custom")]
     Custom,

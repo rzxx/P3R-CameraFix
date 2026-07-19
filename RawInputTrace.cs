@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 namespace p3rpc.camfix;
 
 /// <summary>
-/// Diagnostic-only Win32 input recorder. Records legacy mouse messages, direct
+/// Diagnostic-only Win32 input recorder. Records WM_MOUSEMOVE messages, direct
 /// raw-input reads, cursor sampling/warping, device registration, and XInput.
 /// </summary>
 internal sealed unsafe class RawInputTrace : IDisposable
@@ -114,7 +114,7 @@ internal sealed unsafe class RawInputTrace : IDisposable
             nint lParam = *(nint*)(messagePointer + 0x18);
             Reserve(new TraceSlot
             {
-                Kind = TraceKind.LegacyMouse,
+                Kind = TraceKind.WindowMouse,
                 QpcEnter = enter,
                 QpcExit = exit,
                 OsThread = Native.GetCurrentThreadId(),
@@ -342,7 +342,7 @@ internal sealed unsafe class RawInputTrace : IDisposable
         {
             TraceKind.RawMouse => "raw",
             TraceKind.RawApi => "raw_api",
-            TraceKind.LegacyMouse => "mouse_move",
+            TraceKind.WindowMouse => "mouse_move",
             TraceKind.GetCursor => "get_cursor",
             TraceKind.SetCursor => "set_cursor",
             TraceKind.RegisterDevice => "register",
@@ -410,7 +410,7 @@ internal sealed unsafe class RawInputTrace : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate uint XInputGetStateDelegate(uint userIndex, nint statePointer);
 
-    private enum TraceKind { RawMouse, RawApi, LegacyMouse, GetCursor, SetCursor, RegisterDevice, XInputState }
+    private enum TraceKind { RawMouse, RawApi, WindowMouse, GetCursor, SetCursor, RegisterDevice, XInputState }
 
     private struct TraceSlot
     {

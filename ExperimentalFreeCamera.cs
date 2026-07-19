@@ -289,8 +289,7 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
             return (0f, 0f);
 
         float normalizedMagnitude = Math.Clamp((magnitude - deadzone) / (1f - deadzone), 0f, 1f);
-        float exponent = Mod.Configuration.GetGamepadCurveExponent();
-        float curvedMagnitude = MathF.Pow(normalizedMagnitude, exponent);
+        float curvedMagnitude = Mod.Configuration.ApplyCameraResponseCurve(normalizedMagnitude);
         float scale = curvedMagnitude / magnitude;
         return (Math.Clamp(x * scale, -1f, 1f), Math.Clamp(y * scale, -1f, 1f));
     }

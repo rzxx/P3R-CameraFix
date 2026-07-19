@@ -30,13 +30,13 @@ Select **P3R Camera Fix** in Reloaded-II and press **Configure Mod**. This opens
 | Gamepad Horizontal Speed | `165°/s` | Maximum free-camera yaw speed at full stick |
 | Gamepad Vertical Speed | `100°/s` | Maximum free-camera pitch speed at full stick |
 | Gamepad Deadzone | `3%` | Shared radial deadzone, adjustable from 0–50% |
-| Gamepad Response Curve | `Balanced` | Linear, Responsive, Balanced, Calm, Precision, or Custom power curve |
+| Camera Response Curve | `Standard` | Standard, Comfort, Direct, Dynamic, or Custom stick-to-camera response |
 | Spline Mouse / Gamepad Sensitivity Multiplier | `100%` | Relative to each free-camera base |
 | Invert Mouse Y | Off | Shared mouse inversion for both camera types |
 
-The response graph shows the actual deadzone-remapped curve used by both camera implementations and updates live while configuring it. Choosing **Custom** adds an exponent slider from 1.00 (linear) to 3.00 (calmest near center).
+The response graph shows how right-stick travel becomes camera turn demand in both camera implementations and updates live while configuring it. **Standard** is the recommended set-and-forget curve; **Comfort** makes small adjustments calmer while retaining fast full-stick turns. **Direct (Linear)** exposes a transparent proportional response, while **Dynamic (S-Curve)** keeps the center calm and accelerates through medium/large movement. Choosing **Custom** adds an exponent slider from 1.00 to 3.00, plus independent **Low-End Calm (Toe)** and **High-End Reach (Shoulder)** controls. Toe keeps small camera corrections lower without expanding the deadzone; shoulder pulls large camera movement toward full speed sooner. Both preserve exact zero/full-stick endpoints and a monotonic response.
 
-The **Advanced** tab exposes input-source toggles, spline smoothing and recenter behavior, native camera parameters, and compatibility safeguards. The shipped defaults are the validated profile.
+The **Advanced** tab exposes input-source toggles, spline smoothing and recenter behavior, and native camera parameters. Cursor ownership, cursor-warp rejection, and raw-input recovery use the validated implementation directly rather than presenting internal correctness controls as user settings.
 
 The **Debug** tab is only for diagnosing a reproducible problem. All traces are disabled by default; with debugging off, trace buffers, files, timers, cursor polling, and per-frame telemetry records are not created.
 
@@ -44,7 +44,7 @@ Most numerical settings update while the game is running. Settings described as 
 
 ## Default gamepad response
 
-The default radial response is a conventional power curve: it keeps small corrections gentle and still reaches full speed at full stick, without hidden boosts or segmented damping. Reloaded's configuration button opens a dedicated camera panel with named presets, a Custom exponent, and a live graph of the resulting curve. Maximum horizontal free-camera speed defaults to 165 degrees per second, and the deadzone defaults to 3%, suitable for precise Hall-effect sticks while still tolerating a small amount of ordinary stick noise.
+The default radial camera response is a mild conventional power curve: it keeps small corrections gentle and still reaches full speed at full stick, without temporal acceleration or hidden segmented boosts. Reloaded's configuration button opens a dedicated camera panel with four curated camera-feel presets, Custom endpoint shaping, and a live graph of the exact resulting curve. Maximum horizontal free-camera speed defaults to 165 degrees per second, and the separate hardware deadzone defaults to 3%, suitable for precise Hall-effect sticks while still tolerating a small amount of ordinary stick noise.
 
 ## How it works
 

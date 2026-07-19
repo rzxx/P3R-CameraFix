@@ -31,7 +31,9 @@ public class Configurator : IConfiguratorV3
     public Configurator() { }
     public Configurator(string configDirectory) : this() => ConfigFolder = configDirectory;
 
-    public void Migrate(string oldDirectory, string newDirectory) => _configuratorMixin.Migrate(oldDirectory, newDirectory);
+    // Required by Reloaded-II's configurator interface. The mod has no
+    // pre-release configuration or directory migration to perform.
+    public void Migrate(string oldDirectory, string newDirectory) { }
 
     public TType GetConfiguration<TType>(int index) => (TType)Configurations[index];
 
@@ -63,5 +65,4 @@ public class ConfiguratorMixinBase
 
     public virtual bool TryRunCustomConfiguration(Configurator configurator) => false;
 
-    public virtual void Migrate(string oldDirectory, string newDirectory) { }
 }

@@ -210,30 +210,47 @@ internal sealed class CameraConfigWindow : Window
     private UIElement MakeCurveSelector()
     {
         var panel = new StackPanel { Margin = new Thickness(0, 5, 0, 8) };
-        panel.Children.Add(MakeLabel("Response Curve", "All presets are ordinary power curves and reach 100% at full stick."));
+        panel.Children.Add(MakeLabel("Camera Response Curve", "How right-stick travel becomes camera turn speed. Standard is the recommended all-round choice."));
         var combo = new ComboBox
         {
-            ItemsSource = Enum.GetValues<GamepadCurvePreset>(),
-            SelectedItem = _working.GamepadResponseCurve,
+            ItemsSource = new[]
+            {
+                CameraResponseCurvePreset.Standard,
+                CameraResponseCurvePreset.Comfort,
+                CameraResponseCurvePreset.Direct,
+                CameraResponseCurvePreset.Dynamic,
+                CameraResponseCurvePreset.Custom,
+            },
+            SelectedItem = _working.CameraResponseCurve,
             Margin = new Thickness(0, 3, 0, 4),
         };
         combo.ItemTemplate = MakeEnumTemplate();
         combo.SelectionChanged += (_, _) =>
         {
-            if (combo.SelectedItem is GamepadCurvePreset preset)
+            if (combo.SelectedItem is CameraResponseCurvePreset preset)
             {
-                _working.GamepadResponseCurve = preset;
+                _working.CameraResponseCurve = preset;
                 if (_customCurveEditor != null)
-                    _customCurveEditor.Visibility = preset == GamepadCurvePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
+                    _customCurveEditor.Visibility = preset == CameraResponseCurvePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
                 RefreshCurve();
             }
         };
         panel.Children.Add(combo);
-        _customCurveEditor = MakeFloatSlider("Custom Exponent", "1.00 is linear; higher is calmer near center.", 1f, 3f, 0.05f,
-            () => _working.CustomGamepadCurveExponent,
-            value => { _working.CustomGamepadCurveExponent = value; RefreshCurve(); },
-            value => value.ToString("0.00", CultureInfo.InvariantCulture));
-        _customCurveEditor.Visibility = _working.GamepadResponseCurve == GamepadCurvePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
+        var customCurveEditor = new StackPanel();
+        customCurveEditor.Children.Add(MakeFloatSlider("Exponent", "1.00 is linear; higher bends the whole curve toward calmer response.", 1f, 3f, 0.05f,
+            () => _working.CustomCameraCurveExponent,
+            value => { _working.CustomCameraCurveExponent = value; RefreshCurve(); },
+            value => value.ToString("0.00", CultureInfo.InvariantCulture)));
+        customCurveEditor.Children.Add(MakeIntSlider("Low-End Calm (Toe)", "Keeps small stick values lower without increasing the deadzone.", 0, 100, 1,
+            () => _working.CustomCameraCurveToePercent,
+            value => { _working.CustomCameraCurveToePercent = value; RefreshCurve(); },
+            value => $"{value}%"));
+        customCurveEditor.Children.Add(MakeIntSlider("High-End Reach (Shoulder)", "Pulls large stick values toward full output sooner, without affecting the center.", 0, 100, 1,
+            () => _working.CustomCameraCurveShoulderPercent,
+            value => { _working.CustomCameraCurveShoulderPercent = value; RefreshCurve(); },
+            value => $"{value}%"));
+        _customCurveEditor = customCurveEditor;
+        _customCurveEditor.Visibility = _working.CameraResponseCurve == CameraResponseCurvePreset.Custom ? Visibility.Visible : Visibility.Collapsed;
         panel.Children.Add(_customCurveEditor);
         return panel;
     }
@@ -265,18 +282,6 @@ internal sealed class CameraConfigWindow : Window
         var native = MakeGroup("Native Free Camera");
         AddNativeFields(native);
         root.Children.Add(WrapGroup("Native Free Camera", native));
-
-        var compatibility = MakeGroup("Compatibility and Cursor Ownership");
-        compatibility.Children.Add(MakeCheckBox("Reject Game Cursor-Warp Packets", "Rejects only raw packets matching a game-driven cursor warp.", () => _working.EnableSplineCursorWarpRejection, value => _working.EnableSplineCursorWarpRejection = value));
-        compatibility.Children.Add(MakeIntBox("Cursor-Warp Detection Threshold", "Counts.", () => _working.SplineCursorWarpMinimumCounts, value => _working.SplineCursorWarpMinimumCounts = value, 64, 8192));
-        compatibility.Children.Add(MakeIntBox("Cursor-Warp Match Tolerance", "Counts per axis.", () => _working.SplineCursorWarpMatchTolerance, value => _working.SplineCursorWarpMatchTolerance = value, 0, 64));
-        compatibility.Children.Add(MakeCheckBox("Hide Erroneous Gameplay Cursor", "Retains native dialogue and UI ownership.", () => _working.EnableSplineGameplayCursorGuard, value => _working.EnableSplineGameplayCursorGuard = value));
-        compatibility.Children.Add(MakeCheckBox("Hide Cursor During Native Fades", "Uses native fade/UI ownership; restart required.", () => _working.EnableNativeFadeCursorGuard, value => _working.EnableNativeFadeCursorGuard = value));
-        compatibility.Children.Add(MakeFloatBox("Fade Boundary Bridge", "Seconds.", () => _working.NativeFadeCursorBridgeSeconds, value => _working.NativeFadeCursorBridgeSeconds = value, 0f, 0.25f, "0.000"));
-        compatibility.Children.Add(MakeCheckBox("Enable Legacy Mouse Fallback", "Temporary fallback when raw input is unavailable.", () => _working.EnableSplineLegacyMouseFallback, value => _working.EnableSplineLegacyMouseFallback = value));
-        compatibility.Children.Add(MakeFloatBox("Legacy Mouse Horizontal Speed", "Degrees/second.", () => _working.SplineLegacyMouseYawSpeed, value => _working.SplineLegacyMouseYawSpeed = value, 0f, 2000f, "0"));
-        compatibility.Children.Add(MakeFloatBox("Legacy Mouse Vertical Speed", "Degrees/second.", () => _working.SplineLegacyMousePitchSpeed, value => _working.SplineLegacyMousePitchSpeed = value, 0f, 2000f, "0"));
-        root.Children.Add(WrapGroup("Compatibility and Cursor Ownership", compatibility));
 
         var scroll = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         scroll.SetResourceReference(BackgroundProperty, "BackgroundColorBrush");
@@ -531,12 +536,19 @@ internal sealed class CameraConfigWindow : Window
 
     private void RefreshCurve()
     {
-        float exponent = _working.GetGamepadCurveExponent();
-        _curvePreview?.SetCurve(_working.GamepadDeadzonePercent / 100f, exponent);
+        float exponent = _working.GetCameraCurveExponent();
+        float toe = _working.GetCameraCurveToeStrength();
+        float shoulder = _working.GetCameraCurveShoulderStrength();
+        _curvePreview?.SetCurve(_working.GamepadDeadzonePercent / 100f, exponent, toe, shoulder);
         if (_curveSummary != null)
         {
-            string name = CurveNameConverter.GetName(_working.GamepadResponseCurve);
-            _curveSummary.Text = $"{name} · exponent {exponent:0.00}\n" +
+            string name = CurveNameConverter.GetName(_working.CameraResponseCurve);
+            string shape = toe > 0.0001f || shoulder > 0.0001f
+                ? $" · toe {toe * 100:0}% · shoulder {shoulder * 100:0}%"
+                : string.Empty;
+            string description = CurveNameConverter.GetDescription(_working.CameraResponseCurve);
+            _curveSummary.Text = $"{name} · exponent {exponent:0.00}{shape}\n" +
+                                 $"{description}\n" +
                                  $"{_working.GamepadDeadzonePercent}% deadzone · full stick = {_working.GamepadHorizontalSpeed}°/s horizontal";
         }
     }
@@ -568,15 +580,27 @@ internal sealed class CameraConfigWindow : Window
     private sealed class CurveNameConverter : System.Windows.Data.IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
-            value is GamepadCurvePreset preset ? GetName(preset) : value?.ToString() ?? string.Empty;
+            value is CameraResponseCurvePreset preset ? GetName(preset) : value?.ToString() ?? string.Empty;
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
             throw new NotSupportedException();
 
-        public static string GetName(GamepadCurvePreset preset) => preset switch
+        public static string GetName(CameraResponseCurvePreset preset) => preset switch
         {
-            GamepadCurvePreset.Balanced => "Balanced (Recommended)",
+            CameraResponseCurvePreset.Standard => "Standard (Recommended)",
+            CameraResponseCurvePreset.Direct => "Direct (Linear)",
+            CameraResponseCurvePreset.Dynamic => "Dynamic (S-Curve)",
             _ => preset.ToString(),
+        };
+
+        public static string GetDescription(CameraResponseCurvePreset preset) => preset switch
+        {
+            CameraResponseCurvePreset.Standard => "Natural all-round camera response; start here and forget about it.",
+            CameraResponseCurvePreset.Comfort => "Calmer small camera adjustments while preserving quick full-stick turns.",
+            CameraResponseCurvePreset.Direct => "Transparent linear response; closest to P3R's native transfer after its deadzone.",
+            CameraResponseCurvePreset.Dynamic => "Calm near center, then increasingly quick through medium and large movement.",
+            CameraResponseCurvePreset.Custom => "Manual exponent, low-end toe, and high-end shoulder shaping.",
+            _ => string.Empty,
         };
     }
 }
@@ -633,11 +657,15 @@ internal sealed class CurvePreview : FrameworkElement
 {
     private float _deadzone = 0.03f;
     private float _exponent = 1.7f;
+    private float _toe;
+    private float _shoulder;
 
-    public void SetCurve(float deadzone, float exponent)
+    public void SetCurve(float deadzone, float exponent, float toe, float shoulder)
     {
         _deadzone = Math.Clamp(deadzone, 0f, 0.5f);
         _exponent = Math.Clamp(exponent, 1f, 3f);
+        _toe = Math.Clamp(toe, 0f, 1f);
+        _shoulder = Math.Clamp(shoulder, 0f, 1f);
         InvalidateVisual();
     }
 
@@ -690,7 +718,8 @@ internal sealed class CurvePreview : FrameworkElement
             {
                 double input = index / 160.0;
                 double normalized = input <= _deadzone ? 0 : (input - _deadzone) / (1 - _deadzone);
-                double output = Math.Pow(normalized, _exponent);
+                double output = Config.ApplyCameraResponseCurve(
+                    (float)normalized, _exponent, _toe, _shoulder);
                 var point = new Point(left + (plotWidth * input), bottom - (plotHeight * output));
                 if (index == 0) context.BeginFigure(point, false, false);
                 else context.LineTo(point, true, false);

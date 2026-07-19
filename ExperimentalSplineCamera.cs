@@ -33,7 +33,12 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const float RailMotionHoldDuration = 0.25f;
     private const float RailPositionSpeedThreshold = 5.0f;
     private const float RailAngularSpeedThreshold = 0.5f;
-    private const float LegacyFallbackRecentRawGraceSeconds = 0.25f;
+    private const int CursorWarpMinimumCounts = 128;
+    private const int CursorWarpMatchTolerance = 8;
+    private const float NativeFadeBoundaryBridgeSeconds = 0.075f;
+    private const float MouseRecoveryYawSpeed = 150f;
+    private const float MouseRecoveryPitchSpeed = 90f;
+    private const float MouseRecoveryRecentRawGraceSeconds = 0.25f;
 
     private const string OperationTickSignature =
         "40 53 48 83 EC 40 0F 29 74 24 30 48 8B D9 0F 28 F1 E8 ?? ?? ?? ?? 48 83 BB B0 00 00 00 00 0F 84 ?? ?? ?? ??";
@@ -185,8 +190,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
                               Mod.Configuration.EnableSplineCameraTrace;
 
         if (Mod.Configuration.EnableCameraTransitionTrace ||
-            (Mod.Configuration.EnableNativeFadeCursorGuard &&
-             (Mod.Configuration.EnableFreeCameraFix || Mod.Configuration.EnableSplineCameraFix)))
+            Mod.Configuration.EnableFreeCameraFix || Mod.Configuration.EnableSplineCameraFix)
             _fadeProbe = new UnrealFadeProbe(context, imageBase);
 
         if (Mod.Configuration.EnableCameraTransitionTrace)
@@ -384,13 +388,12 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         Point before = default;
         int haveBefore = Native.GetCursorPos(&before);
         int result = _setCursorPosHook!.OriginalFunction(x, y);
-        if (result == 0 || haveBefore == 0 || !Mod.Configuration.EnableSplineCursorWarpRejection)
+        if (result == 0 || haveBefore == 0)
             return result;
 
         int deltaX = x - before.X;
         int deltaY = y - before.Y;
-        int threshold = Math.Clamp(Mod.Configuration.SplineCursorWarpMinimumCounts, 64, 8192);
-        if (Math.Max(Math.Abs(deltaX), Math.Abs(deltaY)) < threshold)
+        if (Math.Max(Math.Abs(deltaX), Math.Abs(deltaY)) < CursorWarpMinimumCounts)
             return result;
 
         Volatile.Write(ref _warpCandidateX, deltaX);
@@ -438,7 +441,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     private bool IsRecentCursorWarpPacket(int x, int y)
     {
-        if (!Mod.Configuration.EnableSplineCursorWarpRejection || Volatile.Read(ref _warpCandidateArmed) == 0)
+        if (Volatile.Read(ref _warpCandidateArmed) == 0)
             return false;
 
         long age = Stopwatch.GetTimestamp() - Volatile.Read(ref _warpCandidateQpc);
@@ -450,8 +453,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
         int candidateX = Volatile.Read(ref _warpCandidateX);
         int candidateY = Volatile.Read(ref _warpCandidateY);
-        int tolerance = Math.Clamp(Mod.Configuration.SplineCursorWarpMatchTolerance, 0, 64);
-        if (!MatchesCursorWarpPacket(x, y, candidateX, candidateY, tolerance))
+        if (!MatchesCursorWarpPacket(x, y, candidateX, candidateY, CursorWarpMatchTolerance))
             return false;
 
         Volatile.Write(ref _warpCandidateArmed, 0);
@@ -648,12 +650,11 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         float degreesBeforeYaw = *(float*)(hit + 0x2A4);
         InputDevice device = (InputDevice)Volatile.Read(ref _activeDevice);
 
-        // WM_INPUT registration can disappear across menus/maps. The stock
-        // legacy mouse path remains distinguishable by its exact 0.006 steps.
-        // Use it both to recover mouse ownership after controller use and as a
-        // deterministic fallback until raw registration is available again.
-        if (Mod.Configuration.EnableSplineLegacyMouseFallback &&
-            device != InputDevice.Mouse &&
+        // WM_INPUT registration can disappear across menus/maps. P3R's native
+        // mouse axis remains distinguishable by its exact 0.006 steps, so use
+        // it to restore mouse ownership and camera input until raw registration
+        // is available again.
+        if (device != InputDevice.Mouse &&
             IsStickCenteredForDeviceSwitch() &&
             IsQuantizedMouseInput(nativeX, nativeY))
         {
@@ -662,7 +663,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             Volatile.Write(ref _activeDevice, (int)device);
             _mouseBecameActive = true;
             _deviceChangedThisFrame = true;
-            _logger.WriteLine($"[P3R CamFix] Camera input device: {previous} -> Mouse (legacy fallback).");
+            _logger.WriteLine($"[P3R CamFix] Camera input device: {previous} -> Mouse (native-axis recovery).");
         }
 
         float desiredX;
@@ -675,27 +676,26 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         bool rawMouseMovement = device == InputDevice.Mouse &&
                                 _frameMouseSource == MouseSource.Raw &&
                                 (_frameMouseX != 0 || _frameMouseY != 0);
-        bool legacyMouseMovement = device == InputDevice.Mouse &&
-                                   _frameMouseSource == MouseSource.None &&
-                                   Mod.Configuration.EnableSplineLegacyMouseFallback &&
-                                   (Math.Abs(nativeX) > 0.0001f || Math.Abs(nativeY) > 0.0001f);
-        if (legacyMouseMovement)
+        bool recoveryMouseMovement = device == InputDevice.Mouse &&
+                                     _frameMouseSource == MouseSource.None &&
+                                     (Math.Abs(nativeX) > 0.0001f || Math.Abs(nativeY) > 0.0001f);
+        if (recoveryMouseMovement)
         {
             float rawAgeSeconds = QpcAgeSeconds(Stopwatch.GetTimestamp(), Volatile.Read(ref _lastAcceptedRawMouseQpc));
-            if (ShouldDeferLegacyFallback(
+            if (ShouldDeferMouseRecovery(
                     _recenterReason == RecenterReason.NativeLock,
                     _recenterProgress,
                     rawAgeSeconds))
             {
-                legacyMouseMovement = false;
-                _frameMouseSource = MouseSource.LegacyDeferred;
+                recoveryMouseMovement = false;
+                _frameMouseSource = MouseSource.RecoveryDeferred;
             }
             else
             {
-                _frameMouseSource = MouseSource.Legacy;
+                _frameMouseSource = MouseSource.NativeAxisRecovery;
             }
         }
-        bool acceptedMouseMovement = rawMouseMovement || legacyMouseMovement;
+        bool acceptedMouseMovement = rawMouseMovement || recoveryMouseMovement;
 
         (float controllerDemandX, float controllerDemandY) =
             device == InputDevice.Controller && Mod.Configuration.EnableDirectController && _xInputGetStateHook != null
@@ -769,14 +769,12 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             float direction = Mod.Configuration.InvertMouseY ? 1f : -1f;
             desiredY = Math.Clamp(desiredY + (_frameMouseY * pitchSensitivity * direction / marginPitch), -1f, 1f);
 
-            if (_frameMouseSource == MouseSource.Legacy)
+            if (_frameMouseSource == MouseSource.NativeAxisRecovery)
             {
                 float dt = Math.Clamp(deltaTime, 0f, 0.1f);
-                float yawSpeed = Math.Clamp(Mod.Configuration.SplineLegacyMouseYawSpeed, 0f, 2000f);
-                float pitchSpeed = Math.Clamp(Mod.Configuration.SplineLegacyMousePitchSpeed, 0f, 2000f);
-                desiredX = Math.Clamp(desiredX + (nativeX * yawSpeed * dt / marginYaw), -1f, 1f);
-                desiredY = Math.Clamp(desiredY + (nativeY * pitchSpeed * dt / marginPitch), -1f, 1f);
-                _frameMouseSource = MouseSource.Legacy;
+                desiredX = Math.Clamp(desiredX + (nativeX * MouseRecoveryYawSpeed * dt / marginYaw), -1f, 1f);
+                desiredY = Math.Clamp(desiredY + (nativeY * MouseRecoveryPitchSpeed * dt / marginPitch), -1f, 1f);
+                _frameMouseSource = MouseSource.NativeAxisRecovery;
             }
 
             float alpha = ExponentialAlpha(deltaTime, Mod.Configuration.SplineMouseSmoothing);
@@ -1114,8 +1112,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             return (0f, 0f);
 
         float normalizedMagnitude = Math.Clamp((magnitude - deadzone) / (1f - deadzone), 0f, 1f);
-        float exponent = Mod.Configuration.GetGamepadCurveExponent();
-        float curvedMagnitude = MathF.Pow(normalizedMagnitude, exponent);
+        float curvedMagnitude = Mod.Configuration.ApplyCameraResponseCurve(normalizedMagnitude);
         float scale = curvedMagnitude / magnitude;
         float cameraScale = Math.Clamp(Mod.Configuration.SplineGamepadSensitivityPercent, 0, 200) / 100f;
         float yawScale = cameraScale * Math.Clamp(Mod.Configuration.GamepadHorizontalSpeed / 165f, 0f, 4f);
@@ -1184,7 +1181,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         }
         else
         {
-            _logger.WriteLine($"[P3R CamFix] Raw-mouse registration restore failed (Win32 {Marshal.GetLastWin32Error()}); using legacy fallback.", System.Drawing.Color.Orange);
+            _logger.WriteLine($"[P3R CamFix] Raw-mouse registration restore failed (Win32 {Marshal.GetLastWin32Error()}); using P3R's native mouse axis until it recovers.", System.Drawing.Color.Orange);
         }
     }
 
@@ -1241,11 +1238,11 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         ((positionDelta / deltaTime) >= RailPositionSpeedThreshold ||
          (angleDelta / deltaTime) >= RailAngularSpeedThreshold);
 
-    private static bool ShouldDeferLegacyFallback(bool nativeLockRecenterActive, float recenterProgress, float rawAgeSeconds) =>
+    private static bool ShouldDeferMouseRecovery(bool nativeLockRecenterActive, float recenterProgress, float rawAgeSeconds) =>
         nativeLockRecenterActive &&
         recenterProgress < 0.9999f &&
         rawAgeSeconds >= 0f &&
-        rawAgeSeconds <= LegacyFallbackRecentRawGraceSeconds;
+        rawAgeSeconds <= MouseRecoveryRecentRawGraceSeconds;
 
     private static float QpcAgeSeconds(long now, long timestamp)
     {
@@ -1450,7 +1447,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private delegate byte SplineUpdateDelegate(nint hit, float deltaTime, nint sourceTransform, nint outputTransform);
 
     private enum InputDevice { Unknown, Mouse, Controller }
-    private enum MouseSource { None, Raw, Legacy, LegacyDeferred, WarpRejected }
+    private enum MouseSource { None, Raw, NativeAxisRecovery, RecoveryDeferred, WarpRejected }
     private enum RecenterReason { None, NativeLock, MovingIdle }
 
     private struct PendingSplineFrame
@@ -1600,7 +1597,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         // through the normal guarded SetCursor hook.
         if (deltaTime > 0.000001f &&
             (previous == 0 || now - previous > Stopwatch.Frequency / 2) &&
-            Mod.Configuration.EnableSplineGameplayCursorGuard &&
             _setCursorHook != null)
         {
             Volatile.Write(ref _splineInputEnabledSinceResume, 0);
@@ -1617,7 +1613,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         bool haveLiveFadeMode = _fadeProbe?.TryReadLiveMode(out liveFadeMode) == true;
         bool fadeTransactionActive = Volatile.Read(ref _nativeFadeTransactionActive) != 0;
         if (ShouldSuppressNativeFadeTransactionCursor(
-            Mod.Configuration.EnableNativeFadeCursorGuard,
             Volatile.Read(ref _lastFadeProbeStatus),
             fadeTransactionActive,
             haveLiveFadeMode,
@@ -1646,9 +1641,9 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     }
 
     private static bool ShouldSuppressNativeFadeTransactionCursor(
-        bool enabled, int fadeProbeStatus, bool transactionActive,
+        int fadeProbeStatus, bool transactionActive,
         bool liveFadeModeAvailable, int liveFadeMode) =>
-        enabled && fadeProbeStatus == 2 && transactionActive &&
+        fadeProbeStatus == 2 && transactionActive &&
         liveFadeModeAvailable && liveFadeMode != 0;
 
     private static bool HasNativeOperationCursorOwner(
@@ -1669,8 +1664,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     private bool ShouldSuppressSplineGameplayCursor(long now, bool nativeUiCursorOwner)
     {
-        if (!Mod.Configuration.EnableSplineGameplayCursorGuard)
-            return false;
         long recentSpline = Volatile.Read(ref _lastSplineUpdateQpc);
         if (recentSpline == 0 || now - recentSpline < 0 || now - recentSpline > Stopwatch.Frequency / 4)
             return false;
@@ -1683,29 +1676,21 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         long ownership = Volatile.Read(ref _lastNativeOwnershipQpc);
         if (ownership == 0 || now - ownership < 0 || now - ownership > Stopwatch.Frequency / 4)
             return true;
-        if (Mod.Configuration.EnableNativeFadeCursorGuard)
-        {
-            if (ShouldSuppressNativeFadeTransactionHold(
-                    Volatile.Read(ref _nativeFadeTransactionActive) != 0, nativeUiCursorOwner) ||
-                ShouldSuppressNativeFadeCursor(
-                    Volatile.Read(ref _lastFadeProbeStatus), Volatile.Read(ref _lastFadeMode)))
-                return true;
-            float bridge = Math.Clamp(Mod.Configuration.NativeFadeCursorBridgeSeconds, 0f, 0.25f);
-            if (IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeInputDisabledQpc), bridge) ||
-                IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeFadeActiveQpc), bridge))
-                return true;
-        }
+        if (ShouldSuppressNativeFadeTransactionHold(
+                Volatile.Read(ref _nativeFadeTransactionActive) != 0, nativeUiCursorOwner) ||
+            ShouldSuppressNativeFadeCursor(
+                Volatile.Read(ref _lastFadeProbeStatus), Volatile.Read(ref _lastFadeMode)))
+            return true;
+        if (IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeInputDisabledQpc), NativeFadeBoundaryBridgeSeconds) ||
+            IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeFadeActiveQpc), NativeFadeBoundaryBridgeSeconds))
+            return true;
         return Volatile.Read(ref _lastOperatorKeyState) == 3 ||
                Volatile.Read(ref _splineInputEnabledSinceResume) == 0;
     }
 
     private bool ShouldSuppressFreeFadeCursor(long now, bool nativeUiCursorOwner)
     {
-        if (!Mod.Configuration.EnableNativeFadeCursorGuard)
-            return false;
-
         long recentFree = Volatile.Read(ref _lastFreeOperationQpc);
-        float bridge = Math.Clamp(Mod.Configuration.NativeFadeCursorBridgeSeconds, 0f, 0.25f);
         return ShouldSuppressFreeFadeCursorState(
             recentFree != 0 && now >= recentFree && now - recentFree <= Stopwatch.Frequency / 4,
             Volatile.Read(ref _lastFreeDeltaTime),
@@ -1713,8 +1698,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             Volatile.Read(ref _lastFadeMode),
             ShouldSuppressNativeFadeTransactionHold(
                 Volatile.Read(ref _nativeFadeTransactionActive) != 0, nativeUiCursorOwner),
-            IsWithinQpcGrace(now, Volatile.Read(ref _lastFreeNativeInputDisabledQpc), bridge),
-            IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeFadeActiveQpc), bridge));
+            IsWithinQpcGrace(now, Volatile.Read(ref _lastFreeNativeInputDisabledQpc), NativeFadeBoundaryBridgeSeconds),
+            IsWithinQpcGrace(now, Volatile.Read(ref _lastNativeFadeActiveQpc), NativeFadeBoundaryBridgeSeconds));
     }
 
     private static bool ShouldSuppressFreeFadeCursorState(
