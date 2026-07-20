@@ -44,6 +44,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const float MouseRecoveryYawSpeed = 150f;
     private const float MouseRecoveryPitchSpeed = 90f;
     private const float MouseRecoveryRecentRawGraceSeconds = 0.25f;
+    private const int XInputUserCount = 4;
+    private const float DirectControllerFreshnessSeconds = 0.5f;
 
     private const string OperationTickSignature =
         "40 53 48 83 EC 40 0F 29 74 24 30 48 8B D9 0F 28 F1 E8 ?? ?? ?? ?? 48 83 BB B0 00 00 00 00 0F 84 ?? ?? ?? ??";
@@ -135,8 +137,15 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private int _frameSetCursorNonzeroCalls;
     private int _frameSetCursorSuppressedCalls;
     private int _frameShowCursorCalls;
+    private readonly int[] _controllerStickX = new int[XInputUserCount];
+    private readonly int[] _controllerStickY = new int[XInputUserCount];
+    private readonly int[] _controllerConnected = new int[XInputUserCount];
+    private readonly long[] _controllerLastSuccessQpc = new long[XInputUserCount];
+    private readonly long[] _controllerLastActivityQpc = new long[XInputUserCount];
     private int _rightStickX;
     private int _rightStickY;
+    private int _directControllerAvailable;
+    private int _activeControllerUserIndex = -1;
     private int _lastOperationStickX;
     private int _lastOperationStickY;
     private int _activeDevice;
@@ -512,12 +521,87 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private uint XInputGetState(uint userIndex, nint statePointer)
     {
         uint result = _xInputGetStateHook!.OriginalFunction(userIndex, statePointer);
-        if (result == 0 && statePointer != 0 && userIndex == 0)
+        if (userIndex >= XInputUserCount)
+            return result;
+
+        int slot = (int)userIndex;
+        if (result == 0 && statePointer != 0)
         {
-            Volatile.Write(ref _rightStickX, *(short*)(statePointer + 0x0C));
-            Volatile.Write(ref _rightStickY, *(short*)(statePointer + 0x0E));
+            int stickX = *(short*)(statePointer + 0x0C);
+            int stickY = *(short*)(statePointer + 0x0E);
+            int previousX = Interlocked.Exchange(ref _controllerStickX[slot], stickX);
+            int previousY = Interlocked.Exchange(ref _controllerStickY[slot], stickY);
+            long now = Stopwatch.GetTimestamp();
+            Volatile.Write(ref _controllerLastSuccessQpc[slot], now);
+            Volatile.Write(ref _controllerConnected[slot], 1);
+            if (IsDeliberateControllerActivity(previousX, previousY, stickX, stickY))
+                Volatile.Write(ref _controllerLastActivityQpc[slot], now);
+        }
+        else
+        {
+            Volatile.Write(ref _controllerConnected[slot], 0);
+            Volatile.Write(ref _controllerStickX[slot], 0);
+            Volatile.Write(ref _controllerStickY[slot], 0);
+            Volatile.Write(ref _controllerLastSuccessQpc[slot], 0);
+            Volatile.Write(ref _controllerLastActivityQpc[slot], 0);
         }
         return result;
+    }
+
+    private void RefreshDirectControllerSample(long now)
+    {
+        int selectedSlot = -1;
+        long latestActivityQpc = 0;
+        for (int slot = 0; slot < XInputUserCount; slot++)
+        {
+            if (Volatile.Read(ref _controllerConnected[slot]) == 0)
+                continue;
+
+            long lastSuccessQpc = Volatile.Read(ref _controllerLastSuccessQpc[slot]);
+            if (QpcAgeSeconds(now, lastSuccessQpc) > DirectControllerFreshnessSeconds)
+                continue;
+
+            long activityQpc = Volatile.Read(ref _controllerLastActivityQpc[slot]);
+            if (activityQpc > latestActivityQpc)
+            {
+                latestActivityQpc = activityQpc;
+                selectedSlot = slot;
+            }
+        }
+
+        int previousSlot = Interlocked.Exchange(ref _activeControllerUserIndex, selectedSlot);
+        if (selectedSlot != previousSlot)
+        {
+            if (selectedSlot >= 0)
+                _logger.WriteLine($"[P3R CamFix] Direct gamepad camera input: XInput user {selectedSlot}.");
+            else if (previousSlot >= 0)
+                _logger.WriteLine("[P3R CamFix] Direct gamepad sample unavailable; using the game's native camera axis.", System.Drawing.Color.Orange);
+        }
+
+        if (selectedSlot >= 0 && Volatile.Read(ref _controllerConnected[selectedSlot]) != 0)
+        {
+            Volatile.Write(ref _rightStickX, Volatile.Read(ref _controllerStickX[selectedSlot]));
+            Volatile.Write(ref _rightStickY, Volatile.Read(ref _controllerStickY[selectedSlot]));
+            Volatile.Write(ref _directControllerAvailable, 1);
+            return;
+        }
+
+        Volatile.Write(ref _rightStickX, 0);
+        Volatile.Write(ref _rightStickY, 0);
+        Volatile.Write(ref _directControllerAvailable, 0);
+    }
+
+    private static bool IsDeliberateControllerActivity(int previousX, int previousY, int stickX, int stickY)
+    {
+        float x = NormalizeStick(stickX);
+        float y = NormalizeStick(stickY);
+        float deltaX = NormalizeStick(stickX - previousX);
+        float deltaY = NormalizeStick(stickY - previousY);
+        float configuredDeadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
+        float switchThreshold = Math.Max(0.02f, Math.Clamp(configuredDeadzone, 0f, 0.95f) * 0.5f);
+        bool deliberateChange = (deltaX * deltaX) + (deltaY * deltaY) >= 0.0001f;
+        bool outsideSwitchZone = (x * x) + (y * y) >= switchThreshold * switchThreshold;
+        return deliberateChange && outsideSwitchZone;
     }
 
     private void OperationTick(nint operation, float deltaTime)
@@ -557,6 +641,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             _lastRegistrationCheckOperation = _operationSequence;
             EnsureRawMouseRegistration();
         }
+        RefreshDirectControllerSample(_frameOperationQpc);
         int stickX = Volatile.Read(ref _rightStickX);
         int stickY = Volatile.Read(ref _rightStickY);
         InputDevice previous = (InputDevice)Volatile.Read(ref _activeDevice);
@@ -566,7 +651,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         {
             next = InputDevice.Mouse;
         }
-        else if (AnyDirectControllerEnabled() && _xInputGetStateHook != null)
+        else if (AnyControllerCaptureEnabled() && _xInputGetStateHook != null)
         {
             float x = NormalizeStick(stickX);
             float y = NormalizeStick(stickY);
@@ -756,7 +841,9 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         bool acceptedMouseMovement = rawMouseMovement || recoveryMouseMovement;
 
         (float controllerDemandX, float controllerDemandY) =
-            device == InputDevice.Controller && Mod.Configuration.EnableDirectController && _xInputGetStateHook != null
+            device == InputDevice.Controller &&
+            Mod.Configuration.EnableDirectController &&
+            Volatile.Read(ref _directControllerAvailable) != 0
                 ? ApplyControllerCurve(Volatile.Read(ref _rightStickX), Volatile.Read(ref _rightStickY))
                 : (Math.Clamp(nativeX, -1f, 1f), Math.Clamp(nativeY, -1f, 1f));
         bool acceptedCameraDemand = device == InputDevice.Mouse && Mod.Configuration.EnableRawMouse
@@ -1349,8 +1436,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         Mod.Configuration.Enabled && Mod.Configuration.EnableRawMouse &&
         (Mod.Configuration.EnableSplineCameraFix || Mod.Configuration.EnableFreeCameraFix);
 
-    private static bool AnyDirectControllerEnabled() =>
-        Mod.Configuration.Enabled && Mod.Configuration.EnableDirectController &&
+    private static bool AnyControllerCaptureEnabled() =>
+        Mod.Configuration.Enabled &&
         (Mod.Configuration.EnableSplineCameraFix || Mod.Configuration.EnableFreeCameraFix);
 
     internal FreeCameraInputSnapshot GetFreeCameraInputSnapshot() => new(
@@ -1367,7 +1454,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _frameMouseLastQpc,
         Volatile.Read(ref _rightStickX),
         Volatile.Read(ref _rightStickY),
-        _xInputGetStateHook != null);
+        Volatile.Read(ref _directControllerAvailable) != 0);
     private static float Lerp(float start, float target, float alpha) => start + ((target - start) * alpha);
 
     private void ReserveTrace(TraceSlot value)
