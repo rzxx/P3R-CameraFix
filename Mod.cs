@@ -30,6 +30,11 @@ public class Mod : ModBase
     private static bool _sigScanDone;
     private static bool _valuesApplied;
     private static int _scanAttempts;
+    private readonly CameraFilterTrace? _cameraFilterTrace;
+    private readonly RawInputTrace? _rawInputTrace;
+    private readonly FixedCameraTrace? _fixedCameraTrace;
+    private readonly ExperimentalSplineCamera? _experimentalSplineCamera;
+    private readonly ExperimentalFreeCamera? _experimentalFreeCamera;
 
     // Phase 1 (scan):      fires every 5s until behaviors are found.
     // Phase 2 (liveness):  fires every 15s with a cheap int-compare check.
@@ -53,6 +58,58 @@ public class Mod : ModBase
         }
 
         ScanForGlobals(context.StartupScanner, baseAddress);
+
+        if (Configuration.Enabled &&
+            (Configuration.EnableSplineCameraFix || Configuration.EnableFreeCameraFix ||
+             Configuration.EnableCameraTransitionTrace))
+        {
+            if (context.Hooks == null)
+            {
+                LogError("Responsive camera input requested, but Reloaded.Hooks is unavailable.");
+            }
+            else
+            {
+                _experimentalSplineCamera = new ExperimentalSplineCamera(context, baseAddress);
+                if (Configuration.EnableFreeCameraFix)
+                    _experimentalFreeCamera = new ExperimentalFreeCamera(context, baseAddress, _experimentalSplineCamera);
+            }
+        }
+
+        if (Configuration.EnableNativeCameraFilterTrace)
+        {
+            if (context.Hooks == null)
+            {
+                LogError("Camera filter trace requested, but Reloaded.Hooks is unavailable.");
+            }
+            else
+            {
+                _cameraFilterTrace = new CameraFilterTrace(context, baseAddress);
+            }
+        }
+
+        if (Configuration.EnableRawInputTrace)
+        {
+            if (context.Hooks == null)
+            {
+                LogError("Raw input trace requested, but Reloaded.Hooks is unavailable.");
+            }
+            else
+            {
+                _rawInputTrace = new RawInputTrace(context);
+            }
+        }
+
+        if (Configuration.EnableLiteralFixedCameraTrace)
+        {
+            if (context.Hooks == null)
+            {
+                LogError("Fixed camera trace requested, but Reloaded.Hooks is unavailable.");
+            }
+            else
+            {
+                _fixedCameraTrace = new FixedCameraTrace(context, baseAddress);
+            }
+        }
     }
 
     private unsafe void ScanForGlobals(IStartupScanner scanner, nint baseAddress)
@@ -98,32 +155,9 @@ public class Mod : ModBase
 
     private static unsafe nint ResolveRipRelative(nint instrAddr)
     {
-        // For `mov rax, [rip+disp32]` or `lea rax, [rip+disp32]`:
-        // The displacement is a 32-bit signed int at offset +3 (after 48 8B 05 / 48 8D 05)
-        // But the sig might match at different instruction encodings.
-        // We scan the first few bytes for the pattern and find the disp32.
-        // Common: 48 8B 05 XX XX XX XX (7 bytes, disp at +3)
-        //         4C 8D 05 XX XX XX XX (7 bytes, disp at +3)
-        int disp;
-        byte b0 = *(byte*)instrAddr;
-        byte b1 = *(byte*)(instrAddr + 1);
-        byte b2 = *(byte*)(instrAddr + 2);
-
-        if ((b0 == 0x48 || b0 == 0x4C) && (b1 == 0x8B || b1 == 0x8D) && b2 == 0x05)
-        {
-            disp = *(int*)(instrAddr + 3);
-            return instrAddr + 7 + disp;
-        }
-
-        // Fallback: try 48 8D 0D (lea rcx)
-        if (b0 == 0x48 && b1 == 0x8D && b2 == 0x0D)
-        {
-            disp = *(int*)(instrAddr + 3);
-            return instrAddr + 7 + disp;
-        }
-
-        // Another fallback: just try offset +3
-        disp = *(int*)(instrAddr + 3);
+        // Both exact signatures begin with a seven-byte RIP-relative
+        // instruction whose disp32 starts at +3.
+        int disp = *(int*)(instrAddr + 3);
         return instrAddr + 7 + disp;
     }
 
@@ -354,7 +388,9 @@ public class Mod : ModBase
 
     private static unsafe void ApplyValuesToBehavior(UnrealTypes.UObject* behavior)
     {
-        // FldCameraRotParam layout: Speed(0), Acceleration(4), Deceleration(8), Press(12), Release(16) = 20 bytes
+        // FldCameraRotParam layout (0x1C bytes):
+        // Speed(0), Acceleration(4), Deceleration(8), Press(12), Release(16),
+        // CurrentSpeed(20), InputTimer(24).
         // UFldCameraBehaviorFree offsets (from v0.7 dump):
         //   0x00E8: YawParam     (FldCameraRotParam, 20 bytes)
         //   0x0104: PitchParam   (FldCameraRotParam, 20 bytes)
@@ -365,19 +401,21 @@ public class Mod : ModBase
         // Read current values to check if we need to write (avoid unnecessary writes).
         // The game only resets these when the behavior is (re)initialized, not
         // every frame, so this check is almost always false after the first apply.
-        float yawAccelCur = *(float*)(baseAddr + 0x00E8 + 4);
-        float pitchAccelCur = *(float*)(baseAddr + 0x0104 + 4);
-        float correctionAccelCur = *(float*)(baseAddr + 0x0120 + 4);
-
-        bool needsWrite = Math.Abs(yawAccelCur - Configuration.YawAcceleration) > 0.0001f ||
-                          Math.Abs(pitchAccelCur - Configuration.PitchAcceleration) > 0.0001f ||
-                          Math.Abs(correctionAccelCur - Configuration.CorrectionAcceleration) > 0.0001f;
+        bool needsWrite = !RotParamMatches(baseAddr + 0x00E8,
+                              Configuration.GamepadHorizontalSpeed, Configuration.YawAcceleration, Configuration.YawDeceleration,
+                              Configuration.YawPress, Configuration.YawRelease) ||
+                          !RotParamMatches(baseAddr + 0x0104,
+                              Configuration.GamepadVerticalSpeed, Configuration.PitchAcceleration, Configuration.PitchDeceleration,
+                              Configuration.PitchPress, Configuration.PitchRelease) ||
+                          !RotParamMatches(baseAddr + 0x0120,
+                              Configuration.CorrectionSpeed, Configuration.CorrectionAcceleration, Configuration.CorrectionDeceleration,
+                              Configuration.CorrectionPress, Configuration.CorrectionRelease);
 
         if (!needsWrite) return;
 
         // YawParam at 0x00E8
         WriteRotParam(baseAddr + 0x00E8,
-            Configuration.YawSpeed,
+            Configuration.GamepadHorizontalSpeed,
             Configuration.YawAcceleration,
             Configuration.YawDeceleration,
             Configuration.YawPress,
@@ -385,7 +423,7 @@ public class Mod : ModBase
 
         // PitchParam at 0x0104
         WriteRotParam(baseAddr + 0x0104,
-            Configuration.PitchSpeed,
+            Configuration.GamepadVerticalSpeed,
             Configuration.PitchAcceleration,
             Configuration.PitchDeceleration,
             Configuration.PitchPress,
@@ -409,6 +447,20 @@ public class Mod : ModBase
         *(float*)(addr + 8) = decel;
         *(float*)(addr + 12) = press;
         *(float*)(addr + 16) = release;
+        // Settings changed: discard state generated by the previous curve so it
+        // cannot leak a stale speed/delay into the newly configured response.
+        *(float*)(addr + 20) = 0.0f;
+        *(float*)(addr + 24) = 0.0f;
+    }
+
+    private static unsafe bool RotParamMatches(nint addr, float speed, float accel, float decel, float press, float release)
+    {
+        const float epsilon = 0.0001f;
+        return Math.Abs(*(float*)(addr + 0) - speed) <= epsilon &&
+               Math.Abs(*(float*)(addr + 4) - accel) <= epsilon &&
+               Math.Abs(*(float*)(addr + 8) - decel) <= epsilon &&
+               Math.Abs(*(float*)(addr + 12) - press) <= epsilon &&
+               Math.Abs(*(float*)(addr + 16) - release) <= epsilon;
     }
 
     private static void Log(string msg) => _logger?.WriteLine($"[P3R CamFix] {msg}");
@@ -428,6 +480,11 @@ public class Mod : ModBase
 
     public override void Disposing()
     {
+        _experimentalFreeCamera?.Dispose();
+        _experimentalSplineCamera?.Dispose();
+        _fixedCameraTrace?.Dispose();
+        _rawInputTrace?.Dispose();
+        _cameraFilterTrace?.Dispose();
         _timer?.Dispose();
         _timer = null;
     }

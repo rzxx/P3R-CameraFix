@@ -1,9 +1,15 @@
 # Work docs
 plans/
 
+# Local reverse-engineering and analysis work
+Research/
+artifacts/
+ResearchTraces/
+
 # Build artifacts
 bin/
 obj/
+ResearchBuild/
 *.user
 *.suo
 *.cache

@@ -1,89 +1,82 @@
-# Persona 3 Reload Camera Fix
+# P3R Camera Fix Reload
 
-A Reloaded-II mod that removes the sluggish acceleration and smoothing from P3R's normal third-person camera.
+**P3R Camera Fix Reload** is a comprehensive rework of Persona 3 Reload’s camera controls for both mouse and gamepad. It replaces the port’s awkward input handling with a system designed around each input method, while working closely with the game’s movement, UI, dialogue, and transitions.
 
-P3R has two camera systems: fixed and normal third-person. This mod only affects the third-person one. Fixed cameras are left alone - they feel fine as-is.
+The mod comes with tuned defaults, so you can install it and start playing. If the camera still does not feel right for you, a dedicated settings panel gives you clear presets and detailed control over its behavior.
 
 ## Features
 
-- Removes gamepad camera smoothing/acceleration on the normal third-person camera
-- Camera responds instantly to stick input
-- Independent tunable values for yaw (horizontal) and pitch (vertical) camera movement
-- Configurable speed, acceleration, deceleration, and input delay parameters
-- All settings adjustable at runtime via Config.json
+**Direct mouse and gamepad controls.** Mouse movement is handled as real mouse input instead of a simulated analog stick. Both input methods reach the camera immediately, without the original sluggish acceleration, deceleration, input delays, or heavy smoothing. The mod works both during normal gameplay and in Tartarus.
+
+**Designed to feel native.** The rework stays integrated with P3R’s original camera and game states, so collision, character following, and recentering continue to work as intended. It also prevents the mouse cursor from appearing when you don’t need it.
+
+**Extensive customization.** The dedicated settings window lets you adjust mouse sensitivity, gamepad speed, deadzone, response curves, smoothing, recentering, and native camera-follow behavior. It includes ready-made presets and a live graph showing exactly how the selected gamepad curve responds.
 
 ## Installation
 
-1. Download the latest release from [Releases](https://github.com/rzxx/P3R-CameraFix/releases).
-2. Drag and drop the release zip file onto the Reloaded-II window.
-3. Enable **P3R Camera Fix** in the Reloaded-II mod list.
-4. Launch Persona 3 Reload through Reloaded-II (do not launch directly through Steam).
+1. Download the latest package from [Releases](https://github.com/rzxx/P3R-CameraFix/releases).
+2. Drag the downloaded zip onto Reloaded-II.
+3. Enable **P3R Camera Fix Reload**.
+4. Launch Persona 3 Reload through Reloaded-II.
 
 ## Configuration
 
-Edit `Config.json` inside the mod's folder to adjust camera behavior. The following parameters are available:
+Select **P3R Camera Fix Reload** in Reloaded-II and press **Configure Mod**.
 
-| Parameter                | Default | Description                                                                  |
-| ------------------------ | ------- | ---------------------------------------------------------------------------- |
-| `YawSpeed`               | 125.0   | Horizontal camera rotation speed                                             |
-| `YawAcceleration`        | 0.0     | Time to reach full speed (seconds, 0 = instant)                              |
-| `YawDeceleration`        | 0.0     | Time to stop from full speed (seconds, 0 = instant)                          |
-| `YawPress`               | 0.0     | Delay before horizontal rotation starts (seconds)                            |
-| `YawRelease`             | 0.0     | Delay before horizontal deceleration kicks in (seconds)                      |
-| `PitchSpeed`             | 90.0    | Vertical camera rotation speed                                               |
-| `PitchAcceleration`      | 0.0     | Time to reach full speed (seconds, 0 = instant)                              |
-| `PitchDeceleration`      | 0.0     | Time to stop from full speed (seconds, 0 = instant)                          |
-| `PitchPress`             | 0.0     | Delay before vertical rotation starts (seconds)                              |
-| `PitchRelease`           | 0.0     | Delay before vertical deceleration kicks in (seconds)                        |
-| `CorrectionSpeed`        | 35.0    | Auto-correction rotation speed                                               |
-| `CorrectionAcceleration` | 0.5     | Auto-correction accel time (seconds, keep non-zero for smooth camera-follow) |
-| `CorrectionDeceleration` | 0.3     | Auto-correction decel time (seconds)                                         |
-| `CorrectionPress`        | 0.3     | Auto-correction press delay (seconds)                                        |
-| `CorrectionRelease`      | 0.0     | Auto-correction release delay (seconds)                                      |
+The defaults are tuned for immediate play. If something feels off, adjust mouse sensitivity or gamepad turn speed first, then try a different response preset if needed.
 
-Values are applied live. Changes to Config.json take effect within ~15 seconds (on the next liveness check tick).
+| Setting                                 |         Default | Purpose                                                     |
+| --------------------------------------- | --------------: | ----------------------------------------------------------- |
+| Mouse Horizontal / Vertical Sensitivity |          `100%` | Main mouse sensitivity                                      |
+| Gamepad Horizontal Speed                | `165 degrees/s` | Maximum horizontal turn speed                               |
+| Gamepad Vertical Speed                  | `100 degrees/s` | Maximum vertical turn speed                                 |
+| Gamepad Deadzone                        |            `3%` | Adjust to prevent unwanted camera movement from stick drift |
+| Camera Response Curve                   |      `Standard` | How right-stick travel becomes camera rotation              |
+| Spline Mouse Sensitivity Multiplier     |           `50%` | Mouse sensitivity in constrained camera areas               |
+| Spline Gamepad Turn-Speed Multiplier    |           `50%` | Constrained-camera turn-rate limit; preserves full angle reach |
+| Invert Mouse Y                          |             Off | Reverses vertical mouse movement                            |
 
-## How It Works
+Gamepad response presets:
 
-The mod uses signature scanning to locate `FUObjectArray` and `FNamePool` in the P3R executable, which provide access to all active Unreal Engine objects. It then operates in two phases:
+- **Standard (Recommended):** balanced for general play.
+- **Comfort:** reduces camera movement from small and medium stick input.
+- **Direct (Linear):** maps stick position directly to camera speed.
+- **Dynamic (S-Curve):** increases camera movement from medium and large stick input.
+- **Custom:** lets you shape the low, middle, and high parts of the response yourself.
 
-1. **Scan phase** (every 5s): Walks the UObject array looking for `FldCameraBehaviorFree` instances. On the first successful match, it caches the class `FName` PoolLocations so all future class matching uses integer comparison instead of allocating managed strings. Once behaviors are found, values are written and the mod switches to the liveness phase.
+On spline/rail cameras, stick deflection still selects an angle within the authored range, while the spline gamepad multiplier controls how quickly the camera can reach it. Lowering the multiplier calms the camera without shrinking the available view range; returning the stick to center still recenters the controller offset.
 
-2. **Liveness phase** (every 15s): Performs a cheap integer-compare check on each cached behavior pointer (~10ns per pointer, zero allocations). If all pointers are still valid, no further work is done. If a pointer went stale (e.g. the player loaded a new map and the behavior was destroyed/recreated), the mod drops the cache and falls back to the scan phase.
+The **Advanced** tab contains input-source toggles, turn-demand smoothing and recenter controls, and the game’s native camera-follow parameters. Most numerical changes apply while the game is running; settings marked as restart-required take effect on the next launch.
 
-This design means the mod does **zero work** in steady state (camera behaviors alive, values already applied) and only does a full UObject scan when a behavior actually changes — typically once per map load. The game's camera values are written directly into each behavior object's `YawParam`, `PitchParam`, and `CorrectionParam` fields, overriding the game's default acceleration curve. Values persist until the behavior is destroyed.
+## Technical notes
+
+- Startup signature scans resolve the native free-camera update, spline interpolator, field-camera operation tick, and final view-transform path for the supported executable.
+- Relative `WM_INPUT` counts are bucketed per camera frame and applied at the native pitch/yaw result sites. Right-stick state is read before P3R’s upstream deadzone and remap.
+- The spline replacement separates user offset from authored rail motion. Native input locks and rail motion feed its configurable recenter state instead of discarding the stored angle.
+- Native fade, message, actor-UI, field-operation, and battle-command state arbitrate cursor ownership across gameplay transitions.
+- The original camera behavior patch runs when its object is created or its settings change. Debug tracing performs no buffer allocation or file I/O while disabled.
 
 **Target:** Persona 3 Reload (Steam/Windows), Unreal Engine 4.27.2, module `xrd777`
 
-## Building from Source
+## Building from source
 
-**Requirements:**
+Requirements:
 
-- .NET 8.0 SDK or later
-- Reloaded-II mod loader installed
+- .NET 8 SDK or later
+- Reloaded-II
 - Persona 3 Reload (Steam/Windows)
 
-**Steps:**
-
-1. Clone the repository:
-   ```
-   git clone https://github.com/rzxx/P3R-CameraFix
-   ```
-2. Open the solution in Visual Studio 2022 or build via command line:
-   ```
-   dotnet build
-   ```
-3. The compiled mod will be placed in the `publish` folder.
-
-**Dependencies:**
-
-- Reloaded.Memory.SigScan.ReloadedII (included with Reloaded-II)
+```text
+git clone https://github.com/rzxx/P3R-CameraFix
+dotnet build -c Release
+```
 
 ## Credits
 
-- [p3rpc.nativetypes](https://github.com/rirurin/p3rpc.nativetypes) by Rirurin - signature patterns
-- [p3rpc.essentials](https://github.com/AnimatedSwine37/p3rpc.essentials) by AnimatedSwine37 - mod template
-- [p5r-freecam](https://github.com/rirurin/p5r-freecam) by Rirurin - camera struct research
-- [UnrealEssentials](https://github.com/AnimatedSwine37/UnrealEssentials) by AnimatedSwine37 - UE4 modding framework
-- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) - Lua scripting and object dumping
-- [Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II) - mod loader framework
+- [p3rpc.nativetypes](https://github.com/rirurin/p3rpc.nativetypes) by Rirurin
+- [p3rpc.essentials](https://github.com/AnimatedSwine37/p3rpc.essentials) by AnimatedSwine37
+- [p5r-freecam](https://github.com/rirurin/p5r-freecam) by Rirurin
+- [P3RFix](https://codeberg.org/Lyall/P3RFix) by Lyall
+- [UnrealEssentials](https://github.com/AnimatedSwine37/UnrealEssentials) by AnimatedSwine37
+- [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS)
+- [Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II)

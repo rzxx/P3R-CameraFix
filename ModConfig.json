@@ -1,9 +1,9 @@
 {
   "ModId": "p3rpc.camfix",
-  "ModName": "P3R Camera Fix",
+  "ModName": "P3R Camera Fix Reload",
   "ModAuthor": "rzxx",
   "ModVersion": "<REPLACED_VERSION_IN_CI>",
-  "ModDescription": "Removes the sluggish acceleration and smoothing from P3R's normal third-person camera. Edit Config.json to adjust settings.",
+  "ModDescription": "A comprehensive camera rework for Persona 3 Reload, with proper mouse and gamepad controls, deep customization, and QoL improvements. Open 'Configure Mod' to tune it.",
   "ModDll": "p3rpc.camfix.dll",
   "ModIcon": "",
   "ModR2RManagedDll32": "",
@@ -16,6 +16,19 @@
   "IsLibrary": false,
   "ReleaseMetadataFileName": "p3rpc.camfix.ReleaseMetadata.json",
   "PluginData": {
+    "GitHubDependencies": {
+      "IdToConfigMap": {
+        "reloaded.sharedlib.hooks": {
+          "Config": {
+            "UserName": "Sewer56",
+            "RepositoryName": "Reloaded.SharedLib.Hooks.ReloadedII",
+            "UseReleaseTag": true,
+            "AssetFileName": "reloaded.sharedlib.hooks.zip"
+          },
+          "ReleaseMetadataName": "Sewer56.Update.ReleaseMetadata.json"
+        }
+      }
+    },
     "GitHubRelease": {
       "UserName": "rzxx",
       "RepositoryName": "P3R-CameraFix",
@@ -24,7 +37,7 @@
     }
   },
   "IsUniversalMod": false,
-  "ModDependencies": ["Reloaded.Memory.SigScan.ReloadedII"],
+  "ModDependencies": ["Reloaded.Memory.SigScan.ReloadedII", "reloaded.sharedlib.hooks"],
   "OptionalDependencies": [],
   "SupportedAppId": ["p3r.exe"],
   "ProjectUrl": "https://github.com/rzxx/P3R-CameraFix"
