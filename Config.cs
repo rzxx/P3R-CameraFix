@@ -41,9 +41,9 @@ public class Config : Configurable<Config>
 
     [DisplayName("Spline Mouse Sensitivity Multiplier")]
     [Category("01 - Camera")]
-    [Description("Mouse sensitivity in spline/rail cameras relative to the free-camera base. 50% is half speed. Default: 100%.")]
-    [DefaultValue(100)]
-    public int SplineMouseSensitivityPercent { get; set; } = 100;
+    [Description("Mouse sensitivity in spline/rail cameras relative to the free-camera base. 50% is half speed. Default: 50%.")]
+    [DefaultValue(50)]
+    public int SplineMouseSensitivityPercent { get; set; } = 50;
 
     [DisplayName("Spline Gamepad Sensitivity Multiplier")]
     [Category("01 - Camera")]
@@ -113,21 +113,21 @@ public class Config : Configurable<Config>
 
     [DisplayName("Spline Small-Movement Smoothing")]
     [Category("03 - Advanced Spline Camera")]
-    [Description("Time constant for suppressing small unavoidable stick fluctuations. Default: 0.11 seconds; 0 is fully direct.")]
-    [DefaultValue(0.11f)]
-    public float SplineControllerSmallSmoothing { get; set; } = 0.11f;
+    [Description("Time constant for suppressing small unavoidable stick fluctuations. Default: 0.22 seconds; 0 is fully direct.")]
+    [DefaultValue(0.22f)]
+    public float SplineControllerSmallSmoothing { get; set; } = 0.22f;
 
     [DisplayName("Spline Large-Movement Smoothing")]
     [Category("03 - Advanced Spline Camera")]
-    [Description("Time constant for deliberate large stick changes. Default: 0.04 seconds.")]
-    [DefaultValue(0.04f)]
-    public float SplineControllerLargeSmoothing { get; set; } = 0.04f;
+    [Description("Time constant for deliberate large stick changes. Default: 0.08 seconds.")]
+    [DefaultValue(0.08f)]
+    public float SplineControllerLargeSmoothing { get; set; } = 0.08f;
 
     [DisplayName("Spline Stick-Release Smoothing")]
     [Category("03 - Advanced Spline Camera")]
-    [Description("Time constant used when the stick returns to center. Default: 0.075 seconds.")]
-    [DefaultValue(0.075f)]
-    public float SplineControllerRecenterSmoothing { get; set; } = 0.075f;
+    [Description("Time constant used when the stick returns to center. Default: 0.15 seconds.")]
+    [DefaultValue(0.15f)]
+    public float SplineControllerRecenterSmoothing { get; set; } = 0.15f;
 
     [DisplayName("Spline Large-Change Threshold")]
     [Category("03 - Advanced Spline Camera")]

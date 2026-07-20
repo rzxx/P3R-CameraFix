@@ -31,7 +31,8 @@ Select **P3R Camera Fix** in Reloaded-II and press **Configure Mod**. This opens
 | Gamepad Vertical Speed | `100°/s` | Maximum free-camera pitch speed at full stick |
 | Gamepad Deadzone | `3%` | Shared radial deadzone, adjustable from 0–50% |
 | Camera Response Curve | `Standard` | Standard, Comfort, Direct, Dynamic, or Custom stick-to-camera response |
-| Spline Mouse / Gamepad Sensitivity Multiplier | `100%` | Relative to each free-camera base |
+| Spline Mouse Sensitivity Multiplier | `50%` | Relative to the free-camera mouse base |
+| Spline Gamepad Sensitivity Multiplier | `100%` | Relative to the free-camera gamepad base |
 | Invert Mouse Y | Off | Shared mouse inversion for both camera types |
 
 The response graph shows how right-stick travel becomes camera turn demand in both camera implementations and updates live while configuring it. **Standard** is the recommended set-and-forget curve; **Comfort** makes small adjustments calmer while retaining fast full-stick turns. **Direct (Linear)** exposes a transparent proportional response, while **Dynamic (S-Curve)** keeps the center calm and accelerates through medium/large movement. Choosing **Custom** adds an exponent slider from 1.00 to 3.00, plus independent **Low-End Calm (Toe)** and **High-End Reach (Shoulder)** controls. Toe keeps small camera corrections lower without expanding the deadzone; shoulder pulls large camera movement toward full speed sooner. Both preserve exact zero/full-stick endpoints and a monotonic response.
