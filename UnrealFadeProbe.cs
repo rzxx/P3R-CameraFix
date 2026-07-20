@@ -36,12 +36,14 @@ internal sealed unsafe class UnrealFadeProbe
     private readonly List<nint> _fieldManagers = new();
     private readonly List<nint> _townMapActors = new();
     private readonly List<nint> _uiContactManagers = new();
+    private readonly List<nint> _battleGuiStateManagers = new();
     private bool _invalidObjectsLogged;
     private bool _foundLogged;
     private bool _messageFoundLogged;
     private bool _fieldManagerFoundLogged;
     private bool _townMapFoundLogged;
     private bool _uiContactFoundLogged;
+    private bool _battleGuiFoundLogged;
 
     public UnrealFadeProbe(ModContext context, nint imageBase)
     {
@@ -103,6 +105,7 @@ internal sealed unsafe class UnrealFadeProbe
         CaptureMessageState(ref result);
         CaptureTownMapState(ref result);
         CaptureUiContactState(ref result);
+        CaptureBattleGuiState(ref result);
         return result;
     }
 
@@ -191,6 +194,37 @@ internal sealed unsafe class UnrealFadeProbe
             }
 
             if (nonNullCount >= 2 && hiddenCount == nonNullCount)
+            {
+                active = true;
+                return true;
+            }
+        }
+        return available;
+    }
+
+    /// <summary>
+    /// Reads the battle GUI's own command-state machine. Boss encounters can
+    /// return AFldOperator to Free while battle input remains active, so the
+    /// field-operation state is not an authoritative cursor owner there.
+    /// EBtlGuiState values 1..14 identify a live command UI; None and MAX do not.
+    /// </summary>
+    public bool TryReadLiveBattleGuiCursorOwner(out bool active)
+    {
+        active = false;
+        bool available = false;
+        int candidateCount = _battleGuiStateManagers.Count;
+        for (int candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
+        {
+            nint manager = _battleGuiStateManagers[candidateIndex];
+            if ((*(uint*)(manager + 0x5C) & (1u << 4)) != 0)
+                continue;
+
+            int state = *(byte*)(manager + 0x278);
+            if ((uint)state > 15)
+                continue;
+
+            available = true;
+            if (state is > 0 and < 15)
             {
                 active = true;
                 return true;
@@ -348,6 +382,16 @@ internal sealed unsafe class UnrealFadeProbe
                 {
                     _uiContactFoundLogged = true;
                     _logger.WriteLine($"[P3R CamFix] General UI probe: UIContactManager=0x{instance:X}.");
+                }
+            }
+            else if (className == "BtlGuiStateManager")
+            {
+                if (!_battleGuiStateManagers.Contains(instance))
+                    _battleGuiStateManagers.Add(instance);
+                if (!_battleGuiFoundLogged)
+                {
+                    _battleGuiFoundLogged = true;
+                    _logger.WriteLine($"[P3R CamFix] Battle UI probe: BtlGuiStateManager=0x{instance:X}.");
                 }
             }
         }
@@ -547,6 +591,46 @@ internal sealed unsafe class UnrealFadeProbe
             Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0;
     }
 
+    private void CaptureBattleGuiState(ref FadeSnapshot result)
+    {
+        result.BattleGuiManagerCandidateCount = _battleGuiStateManagers.Count;
+        foreach (nint manager in _battleGuiStateManagers)
+        {
+            uint flags58 = *(uint*)(manager + 0x58);
+            uint flags5C = *(uint*)(manager + 0x5C);
+            bool destroying = (flags5C & (1u << 4)) != 0;
+            int nowState = *(byte*)(manager + 0x278);
+            int previousState = *(byte*)(manager + 0x279);
+            nint stateList = *(nint*)(manager + 0x280);
+            int stateCount = *(int*)(manager + 0x288);
+            int stateMax = *(int*)(manager + 0x28C);
+            if (nowState is < 0 or > 15 || previousState is < 0 or > 15 ||
+                stateCount is < 0 or > 1024 || stateMax < stateCount || stateMax > 4096)
+                continue;
+
+            if (destroying)
+                continue;
+
+            if (nowState is > 0 and < 15)
+                result.ActiveBattleGuiManagerCount++;
+
+            if (result.BattleGuiManager != 0 && result.BattleGuiNowState is > 0 and < 15)
+                continue;
+
+            result.BattleGuiManager = manager;
+            result.BattleGuiNowState = nowState;
+            result.BattleGuiPreviousState = previousState;
+            result.BattleGuiStateList = stateList;
+            result.BattleGuiStateCount = stateCount;
+            result.BattleGuiStateMax = stateMax;
+            result.BattleGuiFlags58 = flags58;
+            result.BattleGuiFlags5C = flags5C;
+        }
+
+        result.BattleGuiProbeStatus = result.BattleGuiManager != 0 ? 2 :
+            Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0;
+    }
+
     private string GetClassName(nint classObject)
     {
         if (_classNames.TryGetValue(classObject, out string? result))
@@ -653,6 +737,17 @@ internal unsafe struct FadeSnapshot
     public int UiContactInputActorCount;
     public int UiContactRootActorCount;
     public ulong UiContactActorHash;
+    public int BattleGuiProbeStatus;
+    public int BattleGuiManagerCandidateCount;
+    public int ActiveBattleGuiManagerCount;
+    public nint BattleGuiManager;
+    public int BattleGuiNowState;
+    public int BattleGuiPreviousState;
+    public nint BattleGuiStateList;
+    public int BattleGuiStateCount;
+    public int BattleGuiStateMax;
+    public uint BattleGuiFlags58;
+    public uint BattleGuiFlags5C;
     private fixed ulong _uiContactActors[8];
     private fixed ulong _uiContactActorClasses[8];
     private fixed ulong _uiContactActorInputs[8];

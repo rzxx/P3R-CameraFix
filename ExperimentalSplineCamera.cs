@@ -17,6 +17,10 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 {
     private const uint WmInput = 0x00FF;
     private const uint WmSetCursor = 0x0020;
+    private const uint WmKeyDown = 0x0100;
+    private const uint WmKeyUp = 0x0101;
+    private const uint WmSysKeyDown = 0x0104;
+    private const uint WmSysKeyUp = 0x0105;
     private const uint PmRemove = 0x0001;
     private const uint RidInput = 0x10000003;
     private const uint RimTypeMouse = 0;
@@ -24,6 +28,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const ushort MouseMoveAbsolute = 0x0001;
     private const ushort GenericDesktopUsagePage = 0x0001;
     private const ushort MouseUsage = 0x0002;
+    private const int VkPageUp = 0x21;
     private const int FldCameraHitSplineVtableRva = 0x4294058;
     private const int FldCameraFreeVtableRva = 0x42901B0;
     private const int FldCameraHitBoxVtableRva = 0x42939A8;
@@ -58,6 +63,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private readonly nint _imageBase;
     private readonly bool _diagnosticsEnabled;
     private readonly CameraTransitionTrace? _transitionTrace;
+    private readonly TraceMarkerRecorder? _traceMarker;
     private readonly UnrealFadeProbe? _fadeProbe;
     private readonly IHook<PeekMessageWDelegate>? _peekMessageHook;
     private readonly IHook<SetCursorPosDelegate>? _setCursorPosHook;
@@ -97,10 +103,13 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private long _lastAcceptedRawMouseQpc;
     private int _lastOperatorKeyState;
     private int _lastOperatorState;
+    private int _lastOperatorNextState;
+    private int _lastCameraLock;
     private int _lastFreeOperatorKeyState;
     private int _lastFadeProbeStatus;
     private int _lastFadeMode;
     private int _nativeFadeTransactionActive;
+    private int _traceMarkerKeyDown;
     private float _lastFreeDeltaTime;
     private int _splineInputEnabledSinceResume;
     private int _frameMouseX;
@@ -195,6 +204,9 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
         if (Mod.Configuration.EnableCameraTransitionTrace)
             _transitionTrace = new CameraTransitionTrace(context, imageBase);
+
+        if (_diagnosticsEnabled)
+            _traceMarker = new TraceMarkerRecorder(context);
 
         if (Mod.Configuration.EnableSplineCameraTrace)
         {
@@ -346,6 +358,19 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             return result;
 
         uint message = *(uint*)(messagePointer + 0x08);
+        nint virtualKey = *(nint*)(messagePointer + 0x10);
+        if (_traceMarker != null && virtualKey == VkPageUp &&
+            (message == WmKeyUp || message == WmSysKeyUp))
+        {
+            Volatile.Write(ref _traceMarkerKeyDown, 0);
+        }
+        else if (_traceMarker != null && virtualKey == VkPageUp &&
+                 (message == WmKeyDown || message == WmSysKeyDown) &&
+                 (((ulong)*(nint*)(messagePointer + 0x18) >> 30) & 1UL) == 0 &&
+                 Interlocked.Exchange(ref _traceMarkerKeyDown, 1) == 0)
+        {
+            CaptureTraceMarker();
+        }
         if (_diagnosticsEnabled && message == WmSetCursor)
             Interlocked.Increment(ref _pendingWmSetCursor);
         if (message != WmInput)
@@ -401,6 +426,27 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         Volatile.Write(ref _warpCandidateQpc, Stopwatch.GetTimestamp());
         Volatile.Write(ref _warpCandidateArmed, 1);
         return result;
+    }
+
+    private void CaptureTraceMarker()
+    {
+        long qpc = Stopwatch.GetTimestamp();
+        _traceMarker?.Capture(new TraceMarkerSnapshot(
+            qpc,
+            Volatile.Read(ref _operationSequence),
+            Volatile.Read(ref _lastOperatorKeyState),
+            Volatile.Read(ref _lastOperatorState),
+            Volatile.Read(ref _lastOperatorNextState),
+            Volatile.Read(ref _lastCameraLock),
+            Volatile.Read(ref _activeDevice),
+            _cursorVisible,
+            _cursorHandle,
+            Volatile.Read(ref _lastSetCursorRequested),
+            Volatile.Read(ref _lastSetCursorApplied),
+            Volatile.Read(ref _lastSetCursorQpc),
+            Volatile.Read(ref _lastFadeProbeStatus),
+            Volatile.Read(ref _lastFadeMode),
+            Volatile.Read(ref _nativeFadeTransactionActive)));
     }
 
     private nint SetCursor(nint cursor)
@@ -479,6 +525,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _operationSequence++;
         _frameOperationQpc = Stopwatch.GetTimestamp();
         CaptureNativeInputOwnership(operation);
+        PollTraceMarkerKey();
         FadeSnapshot fade = _fadeProbe?.Capture() ?? default;
         CaptureFadeCursorState(operation, deltaTime, fade);
         _frameMouseX = Interlocked.Exchange(ref _pendingMouseX, 0);
@@ -628,6 +675,17 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _frameMouseSource = MouseSource.None;
         _mouseBecameActive = false;
         _deviceChangedThisFrame = false;
+    }
+
+    private void PollTraceMarkerKey()
+    {
+        if (_traceMarker == null)
+            return;
+
+        bool down = (Native.GetAsyncKeyState(VkPageUp) & 0x8000) != 0;
+        int previous = Interlocked.Exchange(ref _traceMarkerKeyDown, down ? 1 : 0);
+        if (down && previous == 0)
+            CaptureTraceMarker();
     }
 
     private void SplineInterpolator(nint state, nint input, float deltaTime)
@@ -1425,6 +1483,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         }
         _traceFlushTimer?.Dispose();
         _transitionTrace?.Dispose();
+        _traceMarker?.Dispose();
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -1503,6 +1562,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             Volatile.Write(ref _lastNativeInputDisabledQpc, ownershipQpc);
         Volatile.Write(ref _lastOperatorKeyState, _frameOperatorKeyState);
         Volatile.Write(ref _lastOperatorState, _frameOperatorState);
+        Volatile.Write(ref _lastOperatorNextState, _frameOperatorNextState);
+        Volatile.Write(ref _lastCameraLock, _frameCameraLock);
         Volatile.Write(ref _lastNativeOwnershipQpc, ownershipQpc);
         if (_frameOperatorKeyState == 3)
             Volatile.Write(ref _splineInputEnabledSinceResume, 1);
@@ -1612,6 +1673,18 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         int liveFadeMode = 0;
         bool haveLiveFadeMode = _fadeProbe?.TryReadLiveMode(out liveFadeMode) == true;
         bool fadeTransactionActive = Volatile.Read(ref _nativeFadeTransactionActive) != 0;
+
+        // Battle command UI can become interactive while the tail of P3R's
+        // glass-transition FadePlayer is still active. At this point two native
+        // signals agree: BtlGuiState owns command input, and SetCursor was
+        // called with a non-null handle. Let that exact UI owner outrank only
+        // our cursor hold; BtlGuiState::None and every non-battle fade retain
+        // the normal suppression path below.
+        bool liveBattleGuiCursorOwner = false;
+        _fadeProbe?.TryReadLiveBattleGuiCursorOwner(out liveBattleGuiCursorOwner);
+        if (liveBattleGuiCursorOwner)
+            return false;
+
         if (ShouldSuppressNativeFadeTransactionCursor(
             Volatile.Read(ref _lastFadeProbeStatus),
             fadeTransactionActive,
@@ -1633,7 +1706,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
                 Volatile.Read(ref _lastNativeOwnershipQpc),
                 Volatile.Read(ref _lastOperatorState));
             liveNativeUiCursorOwner = liveMessageCursorOwner || liveActorUiCursorOwner ||
-                                      liveOperationCursorOwner;
+                                      liveBattleGuiCursorOwner || liveOperationCursorOwner;
         }
 
         return ShouldSuppressSplineGameplayCursor(now, liveNativeUiCursorOwner) ||
@@ -1763,6 +1836,9 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern int GetCursorInfo(CursorInfo* cursorInfo);
+
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int virtualKey);
     }
 
     [StructLayout(LayoutKind.Sequential)]

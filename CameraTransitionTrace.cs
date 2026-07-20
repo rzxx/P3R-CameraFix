@@ -55,6 +55,7 @@ internal sealed unsafe class CameraTransitionTrace : IDisposable
             _writer.Write($",ui_contact_actor_{index},ui_contact_actor_{index}_class,ui_contact_actor_{index}_input,ui_contact_actor_{index}_root,ui_contact_actor_{index}_flags_58,ui_contact_actor_{index}_flags_5c");
         for (int offset = 0x48; offset <= 0x1D4; offset += 4)
             _writer.Write($",ui_contact_{offset:X3}");
+        _writer.Write(",battle_gui_probe_status,battle_gui_manager_candidates,active_battle_gui_managers,battle_gui_manager,battle_gui_now_state,battle_gui_previous_state,battle_gui_state_list,battle_gui_state_count,battle_gui_state_max,battle_gui_flags_58,battle_gui_flags_5c");
         _writer.Write(",clip_query_ok,clip_left,clip_top,clip_right,clip_bottom,capture_window");
         _writer.WriteLine();
         _writer.Flush();
@@ -335,6 +336,13 @@ internal sealed unsafe class CameraTransitionTrace : IDisposable
         }
         for (int index = 0; index < 100; index++)
             WriteUInt(fade.GetUiContactWord(index));
+        WriteInt(fade.BattleGuiProbeStatus, fade.BattleGuiManagerCandidateCount,
+            fade.ActiveBattleGuiManagerCount);
+        WritePointer(fade.BattleGuiManager);
+        WriteInt(fade.BattleGuiNowState, fade.BattleGuiPreviousState);
+        WritePointer(fade.BattleGuiStateList);
+        WriteInt(fade.BattleGuiStateCount, fade.BattleGuiStateMax);
+        WriteUInt(fade.BattleGuiFlags58); WriteUInt(fade.BattleGuiFlags5C);
         WriteInt(s.ClipQueryOk, s.ClipLeft, s.ClipTop, s.ClipRight, s.ClipBottom);
         WritePointer(s.CaptureWindow);
         _writer.WriteLine();

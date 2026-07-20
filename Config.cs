@@ -263,7 +263,7 @@ public class Config : Configurable<Config>
 
     [DisplayName("Trace Camera Transitions and UI")]
     [Category("99 - Debug")]
-    [Description("Writes high-volume camera, fade, UI-ownership, and cursor telemetry. Restart required. Leave disabled for normal play.")]
+    [Description("Writes high-volume camera, fade, UI-ownership, and cursor telemetry. Press Page Up to mark an observed problem. Restart required. Leave disabled for normal play.")]
     [DefaultValue(false)]
     public bool EnableCameraTransitionTrace { get; set; } = false;
 

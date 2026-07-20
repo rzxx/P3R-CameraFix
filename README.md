@@ -38,7 +38,7 @@ The response graph shows how right-stick travel becomes camera turn demand in bo
 
 The **Advanced** tab exposes input-source toggles, spline smoothing and recenter behavior, and native camera parameters. Cursor ownership, cursor-warp rejection, and raw-input recovery use the validated implementation directly rather than presenting internal correctness controls as user settings.
 
-The **Debug** tab is only for diagnosing a reproducible problem. All traces are disabled by default; with debugging off, trace buffers, files, timers, cursor polling, and per-frame telemetry records are not created.
+The **Debug** tab is only for diagnosing a reproducible problem. While a camera trace is active, pressing **Page Up** writes an immediately flushed marker whose timestamp can be matched across the trace files. All traces are disabled by default; with debugging off, trace buffers, marker files, timers, cursor polling, and per-frame telemetry records are not created.
 
 Most numerical settings update while the game is running. Settings described as restart-required install or remove native hooks and therefore take effect on the next launch.
 

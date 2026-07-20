@@ -300,7 +300,7 @@ internal sealed class CameraConfigWindow : Window
         ((TextBlock)root.Children[^1]).SetResourceReference(ForegroundProperty, "BorderColorLightBrush");
         root.Children.Add(MakeCheckBox("Trace Free Camera", "Restart required.", () => _working.EnableFreeCameraTrace, value => _working.EnableFreeCameraTrace = value));
         root.Children.Add(MakeCheckBox("Trace Spline Camera", "Restart required.", () => _working.EnableSplineCameraTrace, value => _working.EnableSplineCameraTrace = value));
-        root.Children.Add(MakeCheckBox("Trace Camera Transitions and UI", "Restart required.", () => _working.EnableCameraTransitionTrace, value => _working.EnableCameraTransitionTrace = value));
+        root.Children.Add(MakeCheckBox("Trace Camera Transitions and UI", "Press Page Up to mark an observed problem; restart required.", () => _working.EnableCameraTransitionTrace, value => _working.EnableCameraTransitionTrace = value));
         root.Children.Add(MakeCheckBox("Trace Native Camera Filter", "Restart required.", () => _working.EnableNativeCameraFilterTrace, value => _working.EnableNativeCameraFilterTrace = value));
         root.Children.Add(MakeCheckBox("Trace Raw Input", "Restart required.", () => _working.EnableRawInputTrace, value => _working.EnableRawInputTrace = value));
         root.Children.Add(MakeCheckBox("Trace Literal Fixed Cameras", "This does not mean spline cameras; restart required.", () => _working.EnableLiteralFixedCameraTrace, value => _working.EnableLiteralFixedCameraTrace = value));
