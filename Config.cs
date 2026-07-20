@@ -47,9 +47,9 @@ public class Config : Configurable<Config>
 
     [DisplayName("Spline Gamepad Turn-Speed Multiplier")]
     [Category("01 - Camera")]
-    [Description("Spline/rail camera turn-speed limit relative to the free-camera degrees-per-second base. This never reduces the reachable angle range. Default: 50%.")]
-    [DefaultValue(50)]
-    public int SplineGamepadSensitivityPercent { get; set; } = 50;
+    [Description("Spline/rail camera turn-speed limit relative to the free-camera degrees-per-second base. This never reduces the reachable angle range. Default: 25%.")]
+    [DefaultValue(25)]
+    public int SplineGamepadSensitivityPercent { get; set; } = 25;
 
     [DisplayName("Invert Mouse Y")]
     [Category("01 - Camera")]
