@@ -33,7 +33,7 @@ The defaults are tuned for immediate play. If something feels off, adjust mouse 
 | Gamepad Deadzone                        |            `3%` | Adjust to prevent unwanted camera movement from stick drift |
 | Camera Response Curve                   |      `Standard` | How right-stick travel becomes camera rotation              |
 | Spline Mouse Sensitivity Multiplier     |           `50%` | Mouse sensitivity in constrained camera areas               |
-| Spline Gamepad Sensitivity Multiplier   |          `100%` | Gamepad sensitivity in constrained camera areas             |
+| Spline Gamepad Turn-Speed Multiplier    |           `50%` | Constrained-camera turn-rate limit; preserves full angle reach |
 | Invert Mouse Y                          |             Off | Reverses vertical mouse movement                            |
 
 Gamepad response presets:
@@ -44,7 +44,9 @@ Gamepad response presets:
 - **Dynamic (S-Curve):** increases camera movement from medium and large stick input.
 - **Custom:** lets you shape the low, middle, and high parts of the response yourself.
 
-The **Advanced** tab contains input-source toggles, smoothing and recenter controls, and the game’s native camera-follow parameters. Most numerical changes apply while the game is running; settings marked as restart-required take effect on the next launch.
+On spline/rail cameras, stick deflection still selects an angle within the authored range, while the spline gamepad multiplier controls how quickly the camera can reach it. Lowering the multiplier calms the camera without shrinking the available view range; returning the stick to center still recenters the controller offset.
+
+The **Advanced** tab contains input-source toggles, turn-demand smoothing and recenter controls, and the game’s native camera-follow parameters. Most numerical changes apply while the game is running; settings marked as restart-required take effect on the next launch.
 
 ## Technical notes
 

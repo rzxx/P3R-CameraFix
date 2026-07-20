@@ -161,9 +161,9 @@ internal sealed class CameraConfigWindow : Window
         settings.Children.Add(MakeCheckBox("Invert Mouse Y", "Applies to free and spline cameras.", () => _working.InvertMouseY, value => _working.InvertMouseY = value));
 
         settings.Children.Add(MakeHeading("Gamepad"));
-        settings.Children.Add(MakeIntSlider("Horizontal Sensitivity", "Maximum free-camera turn speed.", 30, 300, 5,
+        settings.Children.Add(MakeIntSlider("Horizontal Turn Speed", "Maximum free-camera turn speed.", 30, 300, 5,
             () => _working.GamepadHorizontalSpeed, value => { _working.GamepadHorizontalSpeed = value; RefreshCurve(); }, value => $"{value}°/s"));
-        settings.Children.Add(MakeIntSlider("Vertical Sensitivity", "Maximum free-camera turn speed.", 30, 200, 5,
+        settings.Children.Add(MakeIntSlider("Vertical Turn Speed", "Maximum free-camera turn speed.", 30, 200, 5,
             () => _working.GamepadVerticalSpeed, value => _working.GamepadVerticalSpeed = value, value => $"{value}°/s"));
         settings.Children.Add(MakeIntSlider("Deadzone", "Radial deadzone applied before the curve.", 0, 50, 1,
             () => _working.GamepadDeadzonePercent, value => { _working.GamepadDeadzonePercent = value; RefreshCurve(); }, value => $"{value}%"));
@@ -172,7 +172,7 @@ internal sealed class CameraConfigWindow : Window
         settings.Children.Add(MakeHeading("Spline / Rail Camera"));
         settings.Children.Add(MakeIntSlider("Mouse Sensitivity Multiplier", "Relative to the free-camera mouse base.", 0, 200, 1,
             () => _working.SplineMouseSensitivityPercent, value => _working.SplineMouseSensitivityPercent = value, value => $"{value}%"));
-        settings.Children.Add(MakeIntSlider("Gamepad Sensitivity Multiplier", "Relative to the free-camera gamepad base.", 0, 200, 1,
+        settings.Children.Add(MakeIntSlider("Gamepad Turn-Speed Multiplier", "Scales spline turn speed; angle limits remain fully reachable.", 0, 200, 1,
             () => _working.SplineGamepadSensitivityPercent, value => _working.SplineGamepadSensitivityPercent = value, value => $"{value}%"));
 
         var scroll = new ScrollViewer { Content = settings, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -270,8 +270,8 @@ internal sealed class CameraConfigWindow : Window
         spline.Children.Add(MakeFloatBox("Small-Movement Smoothing", "Seconds; 0 is direct.", () => _working.SplineControllerSmallSmoothing, value => _working.SplineControllerSmallSmoothing = value, 0f, 1f, "0.000"));
         spline.Children.Add(MakeFloatBox("Large-Movement Smoothing", "Seconds.", () => _working.SplineControllerLargeSmoothing, value => _working.SplineControllerLargeSmoothing = value, 0f, 1f, "0.000"));
         spline.Children.Add(MakeFloatBox("Stick-Release Smoothing", "Seconds.", () => _working.SplineControllerRecenterSmoothing, value => _working.SplineControllerRecenterSmoothing = value, 0f, 1f, "0.000"));
-        spline.Children.Add(MakeFloatBox("Large-Change Threshold", "Normalized target distance.", () => _working.SplineControllerLargeChangeThreshold, value => _working.SplineControllerLargeChangeThreshold = value, 0.001f, 1f, "0.000"));
-        spline.Children.Add(MakeFloatBox("Stick Hysteresis", "Normalized target distance; 0 disables.", () => _working.SplineControllerTargetHysteresis, value => _working.SplineControllerTargetHysteresis = value, 0f, 0.25f, "0.000"));
+        spline.Children.Add(MakeFloatBox("Large-Change Threshold", "Normalized turn-demand distance.", () => _working.SplineControllerLargeChangeThreshold, value => _working.SplineControllerLargeChangeThreshold = value, 0.001f, 1f, "0.000"));
+        spline.Children.Add(MakeFloatBox("Stick Hysteresis", "Normalized turn-demand distance; 0 disables.", () => _working.SplineControllerTargetHysteresis, value => _working.SplineControllerTargetHysteresis = value, 0f, 0.25f, "0.000"));
         spline.Children.Add(MakeFloatBox("Mouse Smoothing", "Seconds; 0 is recommended and direct.", () => _working.SplineMouseSmoothing, value => _working.SplineMouseSmoothing = value, 0f, 1f, "0.000"));
         spline.Children.Add(MakeCheckBox("Recenter During Native Input Locks", "Restores authored framing during dialogue, menus, and transitions.", () => _working.EnableSplineNativeLockRecenter, value => _working.EnableSplineNativeLockRecenter = value));
         spline.Children.Add(MakeFloatBox("Autonomous Recenter Duration", "Seconds.", () => _working.SplineAutonomousRecenterDuration, value => _working.SplineAutonomousRecenterDuration = value, 0.05f, 2f, "0.00"));

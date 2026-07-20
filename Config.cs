@@ -27,15 +27,15 @@ public class Config : Configurable<Config>
     [DefaultValue(100)]
     public int MouseVerticalSensitivityPercent { get; set; } = 100;
 
-    [DisplayName("Gamepad Horizontal Sensitivity")]
+    [DisplayName("Gamepad Horizontal Turn Speed")]
     [Category("01 - Camera")]
-    [Description("Maximum horizontal free-camera turn speed. Spline cameras inherit this base before applying their multiplier. Default: 165 degrees/second.")]
+    [Description("Maximum horizontal free-camera turn speed. At 100%, this is also the spline-camera turn-rate limit and does not reduce its angle range. Default: 165 degrees/second.")]
     [DefaultValue(165)]
     public int GamepadHorizontalSpeed { get; set; } = 165;
 
-    [DisplayName("Gamepad Vertical Sensitivity")]
+    [DisplayName("Gamepad Vertical Turn Speed")]
     [Category("01 - Camera")]
-    [Description("Maximum vertical free-camera turn speed. Spline cameras inherit this base before applying their multiplier. Default: 100 degrees/second.")]
+    [Description("Maximum vertical free-camera turn speed. At 100%, this is also the spline-camera turn-rate limit and does not reduce its angle range. Default: 100 degrees/second.")]
     [DefaultValue(100)]
     public int GamepadVerticalSpeed { get; set; } = 100;
 
@@ -45,11 +45,11 @@ public class Config : Configurable<Config>
     [DefaultValue(50)]
     public int SplineMouseSensitivityPercent { get; set; } = 50;
 
-    [DisplayName("Spline Gamepad Sensitivity Multiplier")]
+    [DisplayName("Spline Gamepad Turn-Speed Multiplier")]
     [Category("01 - Camera")]
-    [Description("Gamepad sensitivity in spline/rail cameras relative to the free-camera base. Default: 100%.")]
-    [DefaultValue(100)]
-    public int SplineGamepadSensitivityPercent { get; set; } = 100;
+    [Description("Spline/rail camera turn-speed limit relative to the free-camera degrees-per-second base. This never reduces the reachable angle range. Default: 50%.")]
+    [DefaultValue(50)]
+    public int SplineGamepadSensitivityPercent { get; set; } = 50;
 
     [DisplayName("Invert Mouse Y")]
     [Category("01 - Camera")]
@@ -113,31 +113,31 @@ public class Config : Configurable<Config>
 
     [DisplayName("Spline Small-Movement Smoothing")]
     [Category("03 - Advanced Spline Camera")]
-    [Description("Time constant for suppressing small unavoidable stick fluctuations. Default: 0.22 seconds; 0 is fully direct.")]
+    [Description("Time constant for suppressing small unavoidable changes in stick turn demand. Default: 0.22 seconds; 0 is fully direct.")]
     [DefaultValue(0.22f)]
     public float SplineControllerSmallSmoothing { get; set; } = 0.22f;
 
     [DisplayName("Spline Large-Movement Smoothing")]
     [Category("03 - Advanced Spline Camera")]
-    [Description("Time constant for deliberate large stick changes. Default: 0.08 seconds.")]
+    [Description("Time constant for deliberate large changes in stick turn demand. Default: 0.08 seconds.")]
     [DefaultValue(0.08f)]
     public float SplineControllerLargeSmoothing { get; set; } = 0.08f;
 
     [DisplayName("Spline Stick-Release Smoothing")]
     [Category("03 - Advanced Spline Camera")]
-    [Description("Time constant used when the stick returns to center. Default: 0.15 seconds.")]
+    [Description("Time constant used to ease the spline controller offset toward center when the stick returns to center. Default: 0.15 seconds.")]
     [DefaultValue(0.15f)]
     public float SplineControllerRecenterSmoothing { get; set; } = 0.15f;
 
     [DisplayName("Spline Large-Change Threshold")]
     [Category("03 - Advanced Spline Camera")]
-    [Description("Target distance at which response reaches the fast large-movement smoothing value. Default: 0.35.")]
+    [Description("Turn-demand distance at which response reaches the fast large-movement smoothing value. Default: 0.35.")]
     [DefaultValue(0.35f)]
     public float SplineControllerLargeChangeThreshold { get; set; } = 0.35f;
 
     [DisplayName("Spline Stick Hysteresis")]
     [Category("03 - Advanced Spline Camera")]
-    [Description("Ignores target fluctuations smaller than this normalized distance. Default: 0.01; 0 disables it.")]
+    [Description("Ignores turn-demand fluctuations smaller than this normalized distance. Default: 0.01; 0 disables it.")]
     [DefaultValue(0.01f)]
     public float SplineControllerTargetHysteresis { get; set; } = 0.01f;
 

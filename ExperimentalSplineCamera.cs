@@ -854,9 +854,15 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
                 desiredX = priorDesiredX;
                 desiredY = priorDesiredY;
             }
+
             float alpha = ControllerAlpha(deltaTime, outputBeforeX, outputBeforeY, desiredX, desiredY);
-            outputX = Lerp(outputBeforeX, desiredX, alpha);
-            outputY = Lerp(outputBeforeY, desiredY, alpha);
+            float candidateX = Lerp(outputBeforeX, desiredX, alpha);
+            float candidateY = Lerp(outputBeforeY, desiredY, alpha);
+            // Stick deflection remains the full normalized angle target. Apply
+            // sensitivity only as a degree-space rate cap so it cannot shrink
+            // the authored yaw or pitch range.
+            (outputX, outputY) = LimitControllerTurnRate(
+                deltaTime, outputBeforeX, outputBeforeY, candidateX, candidateY, marginYaw, marginPitch);
         }
 
         outputX = ClampFinite(outputX);
@@ -1160,6 +1166,34 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         return ExponentialAlpha(deltaTime, Lerp(small, large, blend));
     }
 
+    private static (float X, float Y) LimitControllerTurnRate(
+        float deltaTime,
+        float outputX,
+        float outputY,
+        float candidateX,
+        float candidateY,
+        float marginYaw,
+        float marginPitch)
+    {
+        float dt = Math.Clamp(deltaTime, 0f, 0.1f);
+        float splineSpeed = Math.Clamp(Mod.Configuration.SplineGamepadSensitivityPercent, 0, 200) / 100f;
+        float yawDelta = (candidateX - outputX) * marginYaw;
+        float pitchDelta = (candidateY - outputY) * marginPitch;
+        float yawScale = 1f;
+        if (Math.Abs(yawDelta) > float.Epsilon)
+        {
+            float maxYawDelta = Math.Clamp(Mod.Configuration.GamepadHorizontalSpeed, 0, 660) * splineSpeed * dt;
+            yawScale = Math.Min(1f, maxYawDelta / Math.Abs(yawDelta));
+        }
+        float pitchScale = 1f;
+        if (Math.Abs(pitchDelta) > float.Epsilon)
+        {
+            float maxPitchDelta = Math.Clamp(Mod.Configuration.GamepadVerticalSpeed, 0, 400) * splineSpeed * dt;
+            pitchScale = Math.Min(1f, maxPitchDelta / Math.Abs(pitchDelta));
+        }
+        return (Lerp(outputX, candidateX, yawScale), Lerp(outputY, candidateY, pitchScale));
+    }
+
     private static (float X, float Y) ApplyControllerCurve(int rawX, int rawY)
     {
         float x = NormalizeStick(rawX);
@@ -1172,10 +1206,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         float normalizedMagnitude = Math.Clamp((magnitude - deadzone) / (1f - deadzone), 0f, 1f);
         float curvedMagnitude = Mod.Configuration.ApplyCameraResponseCurve(normalizedMagnitude);
         float scale = curvedMagnitude / magnitude;
-        float cameraScale = Math.Clamp(Mod.Configuration.SplineGamepadSensitivityPercent, 0, 200) / 100f;
-        float yawScale = cameraScale * Math.Clamp(Mod.Configuration.GamepadHorizontalSpeed / 165f, 0f, 4f);
-        float pitchScale = cameraScale * Math.Clamp(Mod.Configuration.GamepadVerticalSpeed / 100f, 0f, 4f);
-        return (Math.Clamp(x * scale * yawScale, -1f, 1f), Math.Clamp(y * scale * pitchScale, -1f, 1f));
+        return (Math.Clamp(x * scale, -1f, 1f), Math.Clamp(y * scale, -1f, 1f));
     }
 
     private bool IsSplineState(nint state)
