@@ -49,3 +49,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: P3R-CameraFix.zip
+          prerelease: ${{ contains(github.ref_name, '-') }}
