@@ -138,6 +138,9 @@ internal sealed unsafe class UnrealFadeProbe
         for (int candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
         {
             nint manager = _messageManagers[candidateIndex];
+            if (!IsClass(manager, "MsgManager"))
+                continue;
+
             nint procList = *(nint*)(manager + 0x38);
             int procCount = *(int*)(manager + 0x40);
             int procMax = *(int*)(manager + 0x44);
