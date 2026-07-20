@@ -3,7 +3,7 @@
   "ModName": "P3R Camera Fix Reload",
   "ModAuthor": "rzxx",
   "ModVersion": "<REPLACED_VERSION_IN_CI>",
-  "ModDescription": "A comprehensive camera rework for Persona 3 Reload, bringing proper mouse and gamepad control to the PC release with deep customization and integrated quality-of-life improvements.",
+  "ModDescription": "A comprehensive camera rework for Persona 3 Reload, with proper mouse and gamepad controls, deep customization, and QoL improvements. Open 'Configure Mod' to tune it.",
   "ModDll": "p3rpc.camfix.dll",
   "ModIcon": "",
   "ModR2RManagedDll32": "",
