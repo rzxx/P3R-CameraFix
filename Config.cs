@@ -89,7 +89,7 @@ public class Config : Configurable<Config>
 
     [DisplayName("Camera Response Curve")]
     [Category("02 - Advanced Input")]
-    [Description("How right-stick travel becomes camera turn demand. Standard is recommended; Comfort is calmer; Direct is linear; Dynamic combines a calm center with faster large turns.")]
+    [Description("How right-stick travel becomes camera turn demand. Standard is recommended.")]
     [DefaultValue(CameraResponseCurvePreset.Standard)]
     public CameraResponseCurvePreset CameraResponseCurve { get; set; } = CameraResponseCurvePreset.Standard;
 

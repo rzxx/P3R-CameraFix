@@ -26,7 +26,7 @@ internal sealed class CameraConfigWindow : Window
         _source = source;
         _working = Clone(source);
 
-        Title = "Persona 3 Reload Camera Fix";
+        Title = "P3R Camera Fix Reload";
         Width = 920;
         Height = 720;
         MinWidth = 760;
@@ -595,11 +595,11 @@ internal sealed class CameraConfigWindow : Window
 
         public static string GetDescription(CameraResponseCurvePreset preset) => preset switch
         {
-            CameraResponseCurvePreset.Standard => "Natural all-round camera response; start here and forget about it.",
-            CameraResponseCurvePreset.Comfort => "Calmer small camera adjustments while preserving quick full-stick turns.",
-            CameraResponseCurvePreset.Direct => "Transparent linear response; closest to P3R's native transfer after its deadzone.",
-            CameraResponseCurvePreset.Dynamic => "Calm near center, then increasingly quick through medium and large movement.",
-            CameraResponseCurvePreset.Custom => "Manual exponent, low-end toe, and high-end shoulder shaping.",
+            CameraResponseCurvePreset.Standard => "Balanced for general play; the recommended starting point.",
+            CameraResponseCurvePreset.Comfort => "Less camera movement from small and medium stick input.",
+            CameraResponseCurvePreset.Direct => "Stick position maps directly to camera speed.",
+            CameraResponseCurvePreset.Dynamic => "More camera movement from medium and large stick input.",
+            CameraResponseCurvePreset.Custom => "Shape the low, middle, and high parts of the response yourself.",
             _ => string.Empty,
         };
     }

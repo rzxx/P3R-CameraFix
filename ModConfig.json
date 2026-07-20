@@ -1,9 +1,9 @@
 {
   "ModId": "p3rpc.camfix",
-  "ModName": "P3R Camera Fix",
+  "ModName": "P3R Camera Fix Reload",
   "ModAuthor": "rzxx",
   "ModVersion": "<REPLACED_VERSION_IN_CI>",
-  "ModDescription": "Responsive raw-mouse and direct-gamepad controls for P3R's free and spline/rail cameras.",
+  "ModDescription": "A comprehensive camera rework for Persona 3 Reload, bringing proper mouse and gamepad control to the PC release with deep customization and integrated quality-of-life improvements.",
   "ModDll": "p3rpc.camfix.dll",
   "ModIcon": "",
   "ModR2RManagedDll32": "",

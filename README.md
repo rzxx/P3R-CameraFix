@@ -1,57 +1,58 @@
-# Persona 3 Reload Camera Fix
+# P3R Camera Fix Reload
 
-A Reloaded-II mod that replaces Persona 3 Reload's delayed, stick-like camera input with responsive mouse and gamepad controls.
+**P3R Camera Fix Reload** is a comprehensive rework of Persona 3 Reload’s camera controls for both mouse and gamepad. It replaces the port’s awkward input handling with a system designed around each input method, while working closely with the game’s movement, UI, dialogue, and transitions.
 
-## What it fixes
+The mod comes with tuned defaults, so you can install it and start playing. If the camera still does not feel right for you, a dedicated settings panel gives you clear presets and detailed control over its behavior.
 
-- Uses physical raw mouse movement for same-frame camera rotation instead of P3R's center-warped mouse-to-stick path.
-- Reads the right stick before the game's large upstream deadzone, then applies a small configurable radial deadzone and response curve.
-- Removes the free camera's acceleration, deceleration, and input delays while retaining native collision, pitch limits, and camera-follow behavior.
-- Replaces the spline/rail camera's 166.7 ms input interpolator and rigid 20-degrees-per-second follower.
-- Makes mouse angles persistent in spline cameras, with a predictable recenter only during authored rail motion or native input locks.
-- Preserves native dialogue, menu, loading, fade, and cursor ownership across camera and input-device transitions.
+## Features
 
-P3R has separate free, spline/rail, and literal fixed field-camera implementations. This mod changes the free and spline paths. Literal fixed cameras remain native.
+**Direct mouse and gamepad controls.** Mouse movement is handled as real mouse input instead of a simulated analog stick. Both input methods reach the camera immediately, without the original sluggish acceleration, deceleration, input delays, or heavy smoothing. The mod works both during normal gameplay and in Tartarus.
+
+**Designed to feel native.** The rework stays integrated with P3R’s original camera and game states, so collision, character following, and recentering continue to work as intended. It also prevents the mouse cursor from appearing when you don’t need it.
+
+**Extensive customization.** The dedicated settings window lets you adjust mouse sensitivity, gamepad speed, deadzone, response curves, smoothing, recentering, and native camera-follow behavior. It includes ready-made presets and a live graph showing exactly how the selected gamepad curve responds.
 
 ## Installation
 
 1. Download the latest package from [Releases](https://github.com/rzxx/P3R-CameraFix/releases).
-2. Drag the zip file onto Reloaded-II.
-3. Enable **P3R Camera Fix**.
+2. Drag the downloaded zip onto Reloaded-II.
+3. Enable **P3R Camera Fix Reload**.
 4. Launch Persona 3 Reload through Reloaded-II.
 
 ## Configuration
 
-Select **P3R Camera Fix** in Reloaded-II and press **Configure Mod**. This opens a dedicated camera panel instead of Reloaded's generic property grid. The window follows the active Reloaded theme, while boolean settings use conventional pill switches with explicit labels and descriptions:
+Select **P3R Camera Fix Reload** in Reloaded-II and press **Configure Mod**.
 
-| Setting | Default | Purpose |
-| --- | ---: | --- |
-| Mouse Horizontal / Vertical Sensitivity | `100%` | Free-camera mouse base; exact integer sliders avoid noisy float values |
-| Gamepad Horizontal Speed | `165°/s` | Maximum free-camera yaw speed at full stick |
-| Gamepad Vertical Speed | `100°/s` | Maximum free-camera pitch speed at full stick |
-| Gamepad Deadzone | `3%` | Shared radial deadzone, adjustable from 0–50% |
-| Camera Response Curve | `Standard` | Standard, Comfort, Direct, Dynamic, or Custom stick-to-camera response |
-| Spline Mouse Sensitivity Multiplier | `50%` | Relative to the free-camera mouse base |
-| Spline Gamepad Sensitivity Multiplier | `100%` | Relative to the free-camera gamepad base |
-| Invert Mouse Y | Off | Shared mouse inversion for both camera types |
+The defaults are tuned for immediate play. If something feels off, adjust mouse sensitivity or gamepad turn speed first, then try a different response preset if needed.
 
-The response graph shows how right-stick travel becomes camera turn demand in both camera implementations and updates live while configuring it. **Standard** is the recommended set-and-forget curve; **Comfort** makes small adjustments calmer while retaining fast full-stick turns. **Direct (Linear)** exposes a transparent proportional response, while **Dynamic (S-Curve)** keeps the center calm and accelerates through medium/large movement. Choosing **Custom** adds an exponent slider from 1.00 to 3.00, plus independent **Low-End Calm (Toe)** and **High-End Reach (Shoulder)** controls. Toe keeps small camera corrections lower without expanding the deadzone; shoulder pulls large camera movement toward full speed sooner. Both preserve exact zero/full-stick endpoints and a monotonic response.
+| Setting                                 |         Default | Purpose                                                     |
+| --------------------------------------- | --------------: | ----------------------------------------------------------- |
+| Mouse Horizontal / Vertical Sensitivity |          `100%` | Main mouse sensitivity                                      |
+| Gamepad Horizontal Speed                | `165 degrees/s` | Maximum horizontal turn speed                               |
+| Gamepad Vertical Speed                  | `100 degrees/s` | Maximum vertical turn speed                                 |
+| Gamepad Deadzone                        |            `3%` | Adjust to prevent unwanted camera movement from stick drift |
+| Camera Response Curve                   |      `Standard` | How right-stick travel becomes camera rotation              |
+| Spline Mouse Sensitivity Multiplier     |           `50%` | Mouse sensitivity in constrained camera areas               |
+| Spline Gamepad Sensitivity Multiplier   |          `100%` | Gamepad sensitivity in constrained camera areas             |
+| Invert Mouse Y                          |             Off | Reverses vertical mouse movement                            |
 
-The **Advanced** tab exposes input-source toggles, spline smoothing and recenter behavior, and native camera parameters. Cursor ownership, cursor-warp rejection, and raw-input recovery use the validated implementation directly rather than presenting internal correctness controls as user settings.
+Gamepad response presets:
 
-The **Debug** tab is only for diagnosing a reproducible problem. While a camera trace is active, pressing **Page Up** writes an immediately flushed marker whose timestamp can be matched across the trace files. All traces are disabled by default; with debugging off, trace buffers, marker files, timers, cursor polling, and per-frame telemetry records are not created.
+- **Standard (Recommended):** balanced for general play.
+- **Comfort:** reduces camera movement from small and medium stick input.
+- **Direct (Linear):** maps stick position directly to camera speed.
+- **Dynamic (S-Curve):** increases camera movement from medium and large stick input.
+- **Custom:** lets you shape the low, middle, and high parts of the response yourself.
 
-Most numerical settings update while the game is running. Settings described as restart-required install or remove native hooks and therefore take effect on the next launch.
+The **Advanced** tab contains input-source toggles, smoothing and recenter controls, and the game’s native camera-follow parameters. Most numerical changes apply while the game is running; settings marked as restart-required take effect on the next launch.
 
-## Default gamepad response
+## Technical notes
 
-The default radial camera response is a mild conventional power curve: it keeps small corrections gentle and still reaches full speed at full stick, without temporal acceleration or hidden segmented boosts. Reloaded's configuration button opens a dedicated camera panel with four curated camera-feel presets, Custom endpoint shaping, and a live graph of the exact resulting curve. Maximum horizontal free-camera speed defaults to 165 degrees per second, and the separate hardware deadzone defaults to 3%, suitable for precise Hall-effect sticks while still tolerating a small amount of ordinary stick noise.
-
-## How it works
-
-The mod signature-scans the supported executable for the native free-camera update, spline interpolator, field-camera operation tick, and final view-transform path. Raw mouse deltas are applied at the native pitch/yaw result sites. Direct controller demand enters before P3R's upstream remap. Native camera ownership, collision, authored rail movement, fades, message UI, and common actor-based UI remain authoritative.
-
-The original behavior-object patch is applied only when a free-camera behavior is created or its settings change. Cached behavior liveness is checked periodically without managed allocations. Camera hooks do no trace construction or file I/O when debugging is disabled.
+- Startup signature scans resolve the native free-camera update, spline interpolator, field-camera operation tick, and final view-transform path for the supported executable.
+- Relative `WM_INPUT` counts are bucketed per camera frame and applied at the native pitch/yaw result sites. Right-stick state is read before P3R’s upstream deadzone and remap.
+- The spline replacement separates user offset from authored rail motion. Native input locks and rail motion feed its configurable recenter state instead of discarding the stored angle.
+- Native fade, message, actor-UI, field-operation, and battle-command state arbitrate cursor ownership across gameplay transitions.
+- The original camera behavior patch runs when its object is created or its settings change. Debug tracing performs no buffer allocation or file I/O while disabled.
 
 **Target:** Persona 3 Reload (Steam/Windows), Unreal Engine 4.27.2, module `xrd777`
 
@@ -73,6 +74,7 @@ dotnet build -c Release
 - [p3rpc.nativetypes](https://github.com/rirurin/p3rpc.nativetypes) by Rirurin
 - [p3rpc.essentials](https://github.com/AnimatedSwine37/p3rpc.essentials) by AnimatedSwine37
 - [p5r-freecam](https://github.com/rirurin/p5r-freecam) by Rirurin
+- [P3RFix](https://codeberg.org/Lyall/P3RFix) by Lyall
 - [UnrealEssentials](https://github.com/AnimatedSwine37/UnrealEssentials) by AnimatedSwine37
 - [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS)
 - [Reloaded-II](https://github.com/Reloaded-Project/Reloaded-II)
