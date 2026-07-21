@@ -71,7 +71,7 @@ try {
     }
 
     if (-not (Test-Path -LiteralPath $toolsArchive -PathType Leaf)) {
-        New-Item -Path $publishRoot -ItemType Directory -Force | Out-Null
+        New-Item -Path (Split-Path -Parent $toolsArchive) -ItemType Directory -Force | Out-Null
         Invoke-WebRequest `
             -Uri "https://github.com/Reloaded-Project/Reloaded-II/releases/download/$reloadedToolsVersion/Tools.zip" `
             -OutFile $toolsArchive
