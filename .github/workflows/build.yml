@@ -26,27 +26,14 @@ jobs:
           $version = "${{ github.ref_name }}" -replace '^v', ''
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Replace version placeholder
+      - name: Build Reloaded-II release assets
         shell: pwsh
-        run: |
-          $content = Get-Content -Path "ModConfig.json" -Raw
-          $content = $content.Replace("<REPLACED_VERSION_IN_CI>", $env:VERSION)
-          Set-Content -Path "ModConfig.json" -Value $content -NoNewline
-
-      - name: Publish
-        run: dotnet publish -c Release -p:OutputPath=./publish
-
-      - name: Copy ModConfig
-        shell: pwsh
-        run: Copy-Item -Path "ModConfig.json" -Destination "publish/ModConfig.json"
-
-      - name: Package
-        shell: pwsh
-        working-directory: publish
-        run: Compress-Archive -Path * -DestinationPath ../P3R-CameraFix.zip
+        run: ./Publish.ps1 -Version $env:VERSION
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: P3R-CameraFix.zip
+          body_path: RELEASE_NOTES.md
+          files: |
+            Publish/ToUpload/*
           prerelease: ${{ contains(github.ref_name, '-') }}

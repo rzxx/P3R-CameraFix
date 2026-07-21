@@ -15,7 +15,7 @@ The mod comes with tuned defaults, so you can install it and start playing. If t
 ## Installation
 
 1. Download the latest package from [Releases](https://github.com/rzxx/P3R-CameraFix/releases).
-2. Drag the downloaded zip onto Reloaded-II.
+2. Drag the downloaded `.7z` package onto Reloaded-II.
 3. Enable **P3R Camera Fix Reload**.
 4. Launch Persona 3 Reload through Reloaded-II.
 
@@ -70,6 +70,14 @@ Requirements:
 git clone https://github.com/rzxx/P3R-CameraFix
 dotnet build -c Release
 ```
+
+To create the same Reloaded-II release assets used by CI, run:
+
+```powershell
+./Publish.ps1 -Version 2.0.0
+```
+
+The package and its required update metadata are written to `Publish/ToUpload`.
 
 ## Credits
 
