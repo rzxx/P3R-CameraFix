@@ -25,16 +25,16 @@ Select **P3R Camera Fix Reload** in Reloaded-II and press **Configure Mod**.
 
 The defaults are tuned for immediate play. If something feels off, adjust mouse sensitivity or gamepad turn speed first, then try a different response preset if needed.
 
-| Setting                                 |         Default | Purpose                                                     |
-| --------------------------------------- | --------------: | ----------------------------------------------------------- |
-| Mouse Horizontal / Vertical Sensitivity |          `100%` | Main mouse sensitivity                                      |
-| Gamepad Horizontal Speed                | `165 degrees/s` | Maximum horizontal turn speed                               |
-| Gamepad Vertical Speed                  | `100 degrees/s` | Maximum vertical turn speed                                 |
-| Gamepad Deadzone                        |            `3%` | Adjust to prevent unwanted camera movement from stick drift |
-| Camera Response Curve                   |      `Standard` | How right-stick travel becomes camera rotation              |
-| Spline Mouse Sensitivity Multiplier     |           `50%` | Mouse sensitivity in constrained camera areas               |
-| Spline Gamepad Turn-Speed Multiplier    |           `50%` | Constrained-camera turn-rate limit; preserves full angle reach |
-| Invert Mouse Y                          |             Off | Reverses vertical mouse movement                            |
+| Setting                                 |         Default | Purpose                                                        |
+| --------------------------------------- | --------------: | -------------------------------------------------------------- |
+| Mouse Horizontal / Vertical Sensitivity |          `100%` | Main mouse sensitivity                                         |
+| Gamepad Horizontal Speed                | `165 degrees/s` | Maximum horizontal turn speed                                  |
+| Gamepad Vertical Speed                  | `100 degrees/s` | Maximum vertical turn speed                                    |
+| Gamepad Deadzone                        |            `8%` | Adjust to prevent unwanted camera movement from stick drift    |
+| Camera Response Curve                   |      `Standard` | How right-stick travel becomes camera rotation                 |
+| Spline Mouse Sensitivity Multiplier     |           `50%` | Mouse sensitivity in constrained camera areas                  |
+| Spline Gamepad Turn-Speed Multiplier    |           `25%` | Constrained-camera turn-rate limit; preserves full angle reach |
+| Invert Mouse Y                          |             Off | Reverses vertical mouse movement                               |
 
 Gamepad response presets:
 
