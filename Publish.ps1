@@ -4,7 +4,11 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$')]
     [string] $Version,
 
-    [string] $OutputDirectory = 'Publish/ToUpload'
+    [string] $OutputDirectory = 'Publish/ToUpload',
+
+    [string] $ChangelogPath = 'RELEASE_NOTES.md',
+
+    [string] $ReadmePath = 'README.md'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,12 +18,17 @@ $projectDirectory = $PSScriptRoot
 $projectPath = Join-Path $projectDirectory 'p3rpc.camfix.csproj'
 $publishRoot = Join-Path $projectDirectory 'Publish'
 $buildDirectory = Join-Path $publishRoot 'Build'
-$toolsDirectory = Join-Path $publishRoot 'Tools/Reloaded-Tools'
+$reloadedToolsVersion = '1.30.2'
+$reloadedToolsSha256 = 'A917429E3C684A0266C414C0B82574FEEE2A71CA7B8E8F55DFD822F13A6CF6D2'
+$toolsDirectory = Join-Path $publishRoot "Tools/Reloaded-Tools-$reloadedToolsVersion"
+$toolsArchive = Join-Path $publishRoot "Tools/Reloaded-II-Tools-$reloadedToolsVersion.zip"
 $publisherPath = Join-Path $toolsDirectory 'Reloaded.Publisher.exe'
 $outputPath = [System.IO.Path]::GetFullPath((Join-Path $projectDirectory $OutputDirectory))
 $metadataFileName = 'p3rpc.camfix.ReleaseMetadata.json'
 $metadataAssetFileName = "$metadataFileName.br"
 $packageFileName = "P3R-CameraFix-$Version.7z"
+$resolvedChangelogPath = [System.IO.Path]::GetFullPath((Join-Path $projectDirectory $ChangelogPath))
+$resolvedReadmePath = [System.IO.Path]::GetFullPath((Join-Path $projectDirectory $ReadmePath))
 
 function Remove-DirectoryIfPresent([string] $Path) {
     if (Test-Path -LiteralPath $Path) {
@@ -54,23 +63,38 @@ try {
     if ($modConfig.ReleaseMetadataFileName -ne $metadataFileName) {
         throw "ModConfig.json must use ReleaseMetadataFileName '$metadataFileName'."
     }
-
-    if (-not (Test-Path -LiteralPath $publisherPath)) {
-        $toolsArchive = Join-Path $publishRoot 'Reloaded-Tools.zip'
-        New-Item -Path $publishRoot -ItemType Directory -Force | Out-Null
-        Invoke-WebRequest `
-            -Uri 'https://github.com/Reloaded-Project/Reloaded-II/releases/latest/download/Tools.zip' `
-            -OutFile $toolsArchive
-        New-Item -Path $toolsDirectory -ItemType Directory -Force | Out-Null
-        Expand-Archive -LiteralPath $toolsArchive -DestinationPath $toolsDirectory -Force
-        Remove-Item -LiteralPath $toolsArchive -Force
+    if (-not (Test-Path -LiteralPath $resolvedChangelogPath -PathType Leaf)) {
+        throw "Changelog file not found: $resolvedChangelogPath"
+    }
+    if (-not (Test-Path -LiteralPath $resolvedReadmePath -PathType Leaf)) {
+        throw "README file not found: $resolvedReadmePath"
     }
 
-    & $publisherPath `
-        --modfolder $buildDirectory `
-        --packagename 'P3R-CameraFix-' `
-        --outputfolder $outputPath `
-        --publishtarget Default
+    if (-not (Test-Path -LiteralPath $toolsArchive -PathType Leaf)) {
+        New-Item -Path $publishRoot -ItemType Directory -Force | Out-Null
+        Invoke-WebRequest `
+            -Uri "https://github.com/Reloaded-Project/Reloaded-II/releases/download/$reloadedToolsVersion/Tools.zip" `
+            -OutFile $toolsArchive
+    }
+
+    $actualToolsSha256 = (Get-FileHash -LiteralPath $toolsArchive -Algorithm SHA256).Hash
+    if ($actualToolsSha256 -ne $reloadedToolsSha256) {
+        throw "Reloaded-II Tools $reloadedToolsVersion checksum mismatch. Expected $reloadedToolsSha256; got $actualToolsSha256."
+    }
+
+    Remove-DirectoryIfPresent $toolsDirectory
+    New-Item -Path $toolsDirectory -ItemType Directory -Force | Out-Null
+    Expand-Archive -LiteralPath $toolsArchive -DestinationPath $toolsDirectory -Force
+
+    $publisherArguments = @(
+        '--modfolder', $buildDirectory,
+        '--packagename', 'P3R-CameraFix-',
+        '--outputfolder', $outputPath,
+        '--publishtarget', 'Default',
+        '--changelogpath', $resolvedChangelogPath,
+        '--readmepath', $resolvedReadmePath
+    )
+    & $publisherPath @publisherArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Reloaded.Publisher failed with exit code $LASTEXITCODE."
     }
