@@ -10,6 +10,7 @@ ResearchTraces/
 bin/
 obj/
 ResearchBuild/
+Publish/
 *.user
 *.suo
 *.cache
