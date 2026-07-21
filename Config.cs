@@ -83,9 +83,9 @@ public class Config : Configurable<Config>
 
     [DisplayName("Gamepad Deadzone")]
     [Category("02 - Advanced Input")]
-    [Description("Shared radial right-stick deadzone. Default: 3%.")]
-    [DefaultValue(3)]
-    public int GamepadDeadzonePercent { get; set; } = 3;
+    [Description("Shared radial right-stick deadzone. Default: 8%.")]
+    [DefaultValue(8)]
+    public int GamepadDeadzonePercent { get; set; } = 8;
 
     [DisplayName("Camera Response Curve")]
     [Category("02 - Advanced Input")]
