@@ -182,8 +182,9 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
                 EnsureDirectAxisParams(behavior);
                 float yawSensitivity = 0.04f * Math.Clamp(Mod.Configuration.MouseHorizontalSensitivityPercent, 10, 300) / 100f;
                 float pitchSensitivity = 0.03f * Math.Clamp(Mod.Configuration.MouseVerticalSensitivityPercent, 10, 300) / 100f;
+                float yawDirection = Mod.Configuration.InvertMouseX ? -1f : 1f;
                 float pitchDirection = Mod.Configuration.InvertMouseY ? 1f : -1f;
-                mouseYawDelta = input.MouseX * yawSensitivity;
+                mouseYawDelta = input.MouseX * yawSensitivity * yawDirection;
                 mousePitchDelta = input.MouseY * pitchSensitivity * pitchDirection;
 
                 // A minimal sentinel makes P3R take its normal player-input
@@ -281,8 +282,10 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
 
     private static (float X, float Y) ApplyControllerCurve(int rawX, int rawY)
     {
-        float x = NormalizeStick(rawX);
-        float y = NormalizeStick(rawY);
+        // Direction is part of the replacement input itself. Apply it before
+        // radial shaping so deadzone size and curve magnitude stay unchanged.
+        float x = NormalizeStick(rawX) * (Mod.Configuration.InvertGamepadX ? -1f : 1f);
+        float y = NormalizeStick(rawY) * (Mod.Configuration.InvertGamepadY ? -1f : 1f);
         float magnitude = MathF.Sqrt((x * x) + (y * y));
         float deadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
         if (magnitude <= deadzone || magnitude <= float.Epsilon)

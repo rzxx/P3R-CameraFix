@@ -27,6 +27,18 @@ public class Config : Configurable<Config>
     [DefaultValue(100)]
     public int MouseVerticalSensitivityPercent { get; set; } = 100;
 
+    [DisplayName("Invert Mouse X")]
+    [Category("01 - Camera")]
+    [Description("Reverses horizontal direct raw-mouse movement in both free and spline cameras. P3R's native input path keeps the game's own inversion setting.")]
+    [DefaultValue(false)]
+    public bool InvertMouseX { get; set; } = false;
+
+    [DisplayName("Invert Mouse Y")]
+    [Category("01 - Camera")]
+    [Description("Reverses vertical direct raw-mouse movement in both free and spline cameras. P3R's native input path keeps the game's own inversion setting.")]
+    [DefaultValue(false)]
+    public bool InvertMouseY { get; set; } = false;
+
     [DisplayName("Gamepad Horizontal Turn Speed")]
     [Category("01 - Camera")]
     [Description("Maximum horizontal free-camera turn speed. At 100%, this is also the spline-camera turn-rate limit and does not reduce its angle range. Default: 165 degrees/second.")]
@@ -39,6 +51,18 @@ public class Config : Configurable<Config>
     [DefaultValue(100)]
     public int GamepadVerticalSpeed { get; set; } = 100;
 
+    [DisplayName("Invert Gamepad X")]
+    [Category("01 - Camera")]
+    [Description("Reverses horizontal direct right-stick camera movement in both free and spline cameras. P3R's native input path keeps the game's own inversion setting.")]
+    [DefaultValue(false)]
+    public bool InvertGamepadX { get; set; } = false;
+
+    [DisplayName("Invert Gamepad Y")]
+    [Category("01 - Camera")]
+    [Description("Reverses vertical direct right-stick camera movement in both free and spline cameras. P3R's native input path keeps the game's own inversion setting.")]
+    [DefaultValue(false)]
+    public bool InvertGamepadY { get; set; } = false;
+
     [DisplayName("Spline Mouse Sensitivity Multiplier")]
     [Category("01 - Camera")]
     [Description("Mouse sensitivity in spline/rail cameras relative to the free-camera base. 50% is half speed. Default: 50%.")]
@@ -50,12 +74,6 @@ public class Config : Configurable<Config>
     [Description("Spline/rail camera turn-speed limit relative to the free-camera degrees-per-second base. This never reduces the reachable angle range. Default: 25%.")]
     [DefaultValue(25)]
     public int SplineGamepadSensitivityPercent { get; set; } = 25;
-
-    [DisplayName("Invert Mouse Y")]
-    [Category("01 - Camera")]
-    [Description("Reverses vertical mouse movement in both free and spline cameras.")]
-    [DefaultValue(false)]
-    public bool InvertMouseY { get; set; } = false;
 
     [DisplayName("Enable Free-Camera Replacement")]
     [Category("02 - Advanced Input")]

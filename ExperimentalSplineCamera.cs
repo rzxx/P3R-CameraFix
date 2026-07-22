@@ -910,13 +910,17 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             float splineMouseScale = Math.Clamp(Mod.Configuration.SplineMouseSensitivityPercent, 0, 200) / 100f;
             float yawSensitivity = 0.04f * Math.Clamp(Mod.Configuration.MouseHorizontalSensitivityPercent, 10, 300) / 100f * splineMouseScale;
             float pitchSensitivity = 0.03f * Math.Clamp(Mod.Configuration.MouseVerticalSensitivityPercent, 10, 300) / 100f * splineMouseScale;
-            desiredX = Math.Clamp(desiredX + (_frameMouseX * yawSensitivity / marginYaw), -1f, 1f);
-            float direction = Mod.Configuration.InvertMouseY ? 1f : -1f;
-            desiredY = Math.Clamp(desiredY + (_frameMouseY * pitchSensitivity * direction / marginPitch), -1f, 1f);
+            float rawYawDirection = Mod.Configuration.InvertMouseX ? -1f : 1f;
+            float rawPitchDirection = Mod.Configuration.InvertMouseY ? 1f : -1f;
+            desiredX = Math.Clamp(desiredX + (_frameMouseX * yawSensitivity * rawYawDirection / marginYaw), -1f, 1f);
+            desiredY = Math.Clamp(desiredY + (_frameMouseY * pitchSensitivity * rawPitchDirection / marginPitch), -1f, 1f);
 
             if (_frameMouseSource == MouseSource.NativeAxisRecovery)
             {
                 float dt = Math.Clamp(deltaTime, 0f, 0.1f);
+                // This value has already passed through P3R's input pipeline,
+                // including its native axis inversion. Preserve that sign;
+                // mod inversion belongs only to direct raw mouse counts.
                 desiredX = Math.Clamp(desiredX + (nativeX * MouseRecoveryYawSpeed * dt / marginYaw), -1f, 1f);
                 desiredY = Math.Clamp(desiredY + (nativeY * MouseRecoveryPitchSpeed * dt / marginPitch), -1f, 1f);
                 _frameMouseSource = MouseSource.NativeAxisRecovery;
@@ -1283,8 +1287,10 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     private static (float X, float Y) ApplyControllerCurve(int rawX, int rawY)
     {
-        float x = NormalizeStick(rawX);
-        float y = NormalizeStick(rawY);
+        // Direction is part of the replacement input itself. Apply it before
+        // radial shaping so deadzone size and curve magnitude stay unchanged.
+        float x = NormalizeStick(rawX) * (Mod.Configuration.InvertGamepadX ? -1f : 1f);
+        float y = NormalizeStick(rawY) * (Mod.Configuration.InvertGamepadY ? -1f : 1f);
         float magnitude = MathF.Sqrt((x * x) + (y * y));
         float deadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
         if (magnitude <= deadzone || magnitude <= float.Epsilon)

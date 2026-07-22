@@ -10,7 +10,7 @@ The mod comes with tuned defaults, so you can install it and start playing. If t
 
 **Designed to feel native.** The rework stays integrated with P3R’s original camera and game states, so collision, character following, and recentering continue to work as intended. It also prevents the mouse cursor from appearing when you don’t need it.
 
-**Extensive customization.** The dedicated settings window lets you adjust mouse sensitivity, gamepad speed, deadzone, response curves, smoothing, recentering, and native camera-follow behavior. It includes ready-made presets and a live graph showing exactly how the selected gamepad curve responds.
+**Extensive customization.** The dedicated settings window lets you adjust mouse sensitivity, gamepad speed, independent X/Y inversion for each input method, deadzone, response curves, smoothing, recentering, and native camera-follow behavior. It includes ready-made presets and a live graph showing exactly how the selected gamepad curve responds.
 
 ## Installation
 
@@ -34,7 +34,8 @@ The defaults are tuned for immediate play. If something feels off, adjust mouse 
 | Camera Response Curve                   |      `Standard` | How right-stick travel becomes camera rotation                 |
 | Spline Mouse Sensitivity Multiplier     |           `50%` | Mouse sensitivity in constrained camera areas                  |
 | Spline Gamepad Turn-Speed Multiplier    |           `25%` | Constrained-camera turn-rate limit; preserves full angle reach |
-| Invert Mouse Y                          |             Off | Reverses vertical mouse movement                               |
+| Invert Mouse X / Y                      |       Off / Off | Reverses either mouse camera axis independently                |
+| Invert Gamepad X / Y                    |       Off / Off | Reverses either right-stick camera axis independently          |
 
 Gamepad response presets:
 
@@ -45,6 +46,8 @@ Gamepad response presets:
 - **Custom:** lets you shape the low, middle, and high parts of the response yourself.
 
 On spline/rail cameras, stick deflection still selects an angle within the authored range, while the spline gamepad multiplier controls how quickly the camera can reach it. Lowering the multiplier calms the camera without shrinking the available view range; returning the stick to center still recenters the controller offset.
+
+The mod's inversion controls apply to its direct raw-mouse and direct XInput paths. If either direct input source is disabled—or the spline camera temporarily uses P3R's native mouse-axis recovery—the native axis is left unchanged and P3R's own inversion setting remains authoritative.
 
 The **Advanced** tab contains input-source toggles, turn-demand smoothing and recenter controls, and the game’s native camera-follow parameters. Most numerical changes apply while the game is running; settings marked as restart-required take effect on the next launch.
 

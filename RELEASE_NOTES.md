@@ -12,6 +12,7 @@ Version 2 is a major camera-control rework for both mouse and gamepad.
 
 - Added direct raw-mouse camera input without simulated analog-stick behavior.
 - Added configurable gamepad speed, deadzone, response curves, smoothing, and recentering.
+- Added independent horizontal and vertical camera inversion for mouse and gamepad.
 - Added proper control for spline and rail-camera areas while preserving their full authored view range.
 - Added a dedicated configuration window with presets and a live response-curve graph.
 - Improved camera and cursor behavior across dialogue, menus, battles, fades, and gameplay transitions.
