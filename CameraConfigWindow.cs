@@ -158,13 +158,16 @@ internal sealed class CameraConfigWindow : Window
             () => _working.MouseHorizontalSensitivityPercent, value => _working.MouseHorizontalSensitivityPercent = value, value => $"{value}%"));
         settings.Children.Add(MakeIntSlider("Vertical Sensitivity", "Free-camera mouse base.", 10, 300, 1,
             () => _working.MouseVerticalSensitivityPercent, value => _working.MouseVerticalSensitivityPercent = value, value => $"{value}%"));
-        settings.Children.Add(MakeCheckBox("Invert Mouse Y", "Applies to free and spline cameras.", () => _working.InvertMouseY, value => _working.InvertMouseY = value));
+        settings.Children.Add(MakeCheckBox("Invert Horizontal Axis", "Reverses direct mouse X in free and spline cameras.", () => _working.InvertMouseX, value => _working.InvertMouseX = value));
+        settings.Children.Add(MakeCheckBox("Invert Vertical Axis", "Reverses direct mouse Y in free and spline cameras.", () => _working.InvertMouseY, value => _working.InvertMouseY = value));
 
         settings.Children.Add(MakeHeading("Gamepad"));
         settings.Children.Add(MakeIntSlider("Horizontal Turn Speed", "Maximum free-camera turn speed.", 30, 300, 5,
             () => _working.GamepadHorizontalSpeed, value => { _working.GamepadHorizontalSpeed = value; RefreshCurve(); }, value => $"{value}°/s"));
         settings.Children.Add(MakeIntSlider("Vertical Turn Speed", "Maximum free-camera turn speed.", 30, 200, 5,
             () => _working.GamepadVerticalSpeed, value => _working.GamepadVerticalSpeed = value, value => $"{value}°/s"));
+        settings.Children.Add(MakeCheckBox("Invert Horizontal Axis", "Reverses direct right-stick X in free and spline cameras.", () => _working.InvertGamepadX, value => _working.InvertGamepadX = value));
+        settings.Children.Add(MakeCheckBox("Invert Vertical Axis", "Reverses direct right-stick Y in free and spline cameras.", () => _working.InvertGamepadY, value => _working.InvertGamepadY = value));
         settings.Children.Add(MakeIntSlider("Deadzone", "Radial deadzone applied before the curve.", 0, 50, 1,
             () => _working.GamepadDeadzonePercent, value => { _working.GamepadDeadzonePercent = value; RefreshCurve(); }, value => $"{value}%"));
         settings.Children.Add(MakeCurveSelector());
