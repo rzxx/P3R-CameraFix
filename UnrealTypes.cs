@@ -1,6 +1,3 @@
-using System.Runtime.InteropServices;
-using System.Diagnostics;
-
 namespace p3rpc.camfix;
 
 internal static unsafe class UnrealTypes
@@ -8,77 +5,16 @@ internal static unsafe class UnrealTypes
     private const int ObjectsPerChunk = 0x10000;
     private const int ObjectItemSize = 0x18;
     private const uint InvalidObjectFlags =
-        (uint)(EInternalObjectFlags.Garbage |
-               EInternalObjectFlags.PersistentGarbage |
-               EInternalObjectFlags.Unreachable |
-               EInternalObjectFlags.PendingKill |
-               EInternalObjectFlags.PendingConstruction);
+        (1u << 21) | // Garbage
+        (1u << 22) | // PersistentGarbage
+        (1u << 28) | // Unreachable
+        (1u << 29) | // PendingKill
+        (1u << 31);  // PendingConstruction
     private const uint InvalidUObjectFlags =
         (1u << 15) | // BeginDestroyed
         (1u << 16) | // FinishDestroyed
         (1u << 29) | // PendingKill
         (1u << 30);  // Garbage
-
-    [StructLayout(LayoutKind.Sequential, Size = 0x28)]
-    public struct UObject
-    {
-        public IntPtr VTable;
-        public uint ObjectFlags;
-        public uint InternalIndex;
-        public UClass* ClassPrivate;
-        public FName NamePrivate;
-        public UObject* OuterPrivate;
-    }
-
-    [StructLayout(LayoutKind.Explicit, Size = 0x460)]
-    public struct UClass
-    {
-        [FieldOffset(0x0)] public UObject baseObj;
-        [FieldOffset(0x118)] public UObject* ClassDefaultObject;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct FName
-    {
-        public uint PoolLocation;
-        public uint Field04;
-    }
-
-    [StructLayout(LayoutKind.Explicit, Size = 0x30)]
-    public struct FUObjectArray
-    {
-        [FieldOffset(0x0)] public int ObjFirstGCIndex;
-        [FieldOffset(0x4)] public int ObjLastNonGCIndex;
-        [FieldOffset(0x10)] public FUObjectItem** Objects;
-        [FieldOffset(0x24)] public int NumElements;
-        [FieldOffset(0x2c)] public int NumChunks;
-    }
-
-    [StructLayout(LayoutKind.Explicit, Size = 0x18)]
-    public struct FUObjectItem
-    {
-        [FieldOffset(0x0)] public UObject* Object;
-        [FieldOffset(0x8)] public EInternalObjectFlags Flags;
-        [FieldOffset(0xC)] public int ClusterRootIndex;
-        [FieldOffset(0x10)] public int SerialNumber;
-    }
-
-    [Flags]
-    public enum EInternalObjectFlags : uint
-    {
-        None = 0,
-        Garbage = 1u << 21,
-        PersistentGarbage = 1u << 22,
-        ReachableInCluster = 1u << 23,
-        ClusterRoot = 1u << 24,
-        Native = 1u << 25,
-        Async = 1u << 26,
-        AsyncLoading = 1u << 27,
-        Unreachable = 1u << 28,
-        PendingKill = 1u << 29,
-        RootSet = 1u << 30,
-        PendingConstruction = 1u << 31,
-    }
 
     /// <summary>
     /// Non-owning UObject identity. The pointer is retained only as an opaque
@@ -187,40 +123,4 @@ internal static unsafe class UnrealTypes
 
     private static bool HasInvalidUObjectFlags(nint instance) =>
         (*(uint*)(instance + 0x08) & InvalidUObjectFlags) != 0;
-
-    [StructLayout(LayoutKind.Explicit, Size = 0x10)]
-    public struct FNamePool
-    {
-        [FieldOffset(0x8)] public uint PoolCount;
-        [FieldOffset(0xc)] public uint NameCount;
-
-        public IntPtr GetPool(uint poolIdx)
-        {
-            fixed (FNamePool* self = &this)
-                return *((IntPtr*)(self + 1) + poolIdx);
-        }
-
-        public string GetString(FName name) => GetString(name.PoolLocation);
-
-        public string GetString(uint poolLoc)
-        {
-            fixed (FNamePool* self = &this)
-            {
-                IntPtr ptr = GetPool(poolLoc >> 0x10);
-                ptr += (nint)((poolLoc & 0xFFFF) * 2);
-                return GetStringFromPtr(ptr);
-            }
-        }
-
-        private static string GetStringFromPtr(IntPtr ptr)
-        {
-            short flags = *(short*)ptr;
-            int length = flags >> 6;
-            bool isWide = (flags & 1) != 0;
-            IntPtr strPtr = ptr + 2;
-            return isWide
-                ? Marshal.PtrToStringUni(strPtr, length) ?? ""
-                : Marshal.PtrToStringAnsi(strPtr, length) ?? "";
-        }
-    }
 }

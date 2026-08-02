@@ -31,8 +31,8 @@ internal sealed unsafe class UnrealFadeProbe
     private long _nextScanQpc;
     private long _nextMessageScanQpc;
     private readonly List<UnrealTypes.ObjectHandle> _messageManagers = new();
-    private readonly List<UnrealTypes.ObjectHandle> _fieldManagers = new();
-    private readonly List<UnrealTypes.ObjectHandle> _townMapActors = new();
+    private List<UnrealTypes.ObjectHandle>? _fieldManagers;
+    private List<UnrealTypes.ObjectHandle>? _townMapActors;
     private readonly List<UnrealTypes.ObjectHandle> _uiContactManagers = new();
     private readonly List<UnrealTypes.ObjectHandle> _battleGuiStateManagers = new();
     private uint _gameThreadId;
@@ -86,12 +86,32 @@ internal sealed unsafe class UnrealFadeProbe
         });
     }
 
-    public FadeSnapshot Capture(bool includeDiagnostics)
+    public FadeRuntimeSnapshot CaptureRuntime(bool includeDiagnostics)
     {
         Volatile.Write(ref _gameThreadId, Native.GetCurrentThreadId());
-        TryDiscover();
+        TryDiscover(includeDiagnostics);
         DiscoverMessageManagers(includeDiagnostics);
 
+        TryResolveClass(_fadePlayer, "FadePlayer", out nint fadePlayer);
+        int mode = 0;
+        bool fadeAvailable = false;
+        if (fadePlayer != 0)
+        {
+            uint value = *(uint*)(fadePlayer + 0x30);
+            if (value <= 2)
+            {
+                fadeAvailable = true;
+                mode = unchecked((int)value);
+            }
+        }
+
+        CacheRuntimeCursorState(fadeAvailable, mode);
+        int status = fadePlayer != 0 ? 2 : _gObjects != 0 && _appendString != 0 ? 1 : 0;
+        return new FadeRuntimeSnapshot(status, mode);
+    }
+
+    public FadeSnapshot CaptureDiagnostics()
+    {
         TryResolveClass(_uiSubsystem, "UISubsystem", out nint uiSubsystem);
         TryResolveClass(_fadePlayer, "FadePlayer", out nint fadePlayer);
 
@@ -104,29 +124,18 @@ internal sealed unsafe class UnrealFadeProbe
 
         if (fadePlayer != 0)
         {
-            if (includeDiagnostics)
-            {
-                for (int index = 0; index < FadeWordCount; index++)
-                    result.SetWord(index, *(uint*)(fadePlayer + 0x28 + index * 4));
+            for (int index = 0; index < FadeWordCount; index++)
+                result.SetWord(index, *(uint*)(fadePlayer + 0x28 + index * 4));
 
-                result.Programs = *(nint*)(fadePlayer + 0x88);
-                result.ProgramCount = *(int*)(fadePlayer + 0x90);
-                result.ProgramMax = *(int*)(fadePlayer + 0x94);
-            }
-            else
-            {
-                result.SetWord(2, *(uint*)(fadePlayer + 0x30));
-            }
+            result.Programs = *(nint*)(fadePlayer + 0x88);
+            result.ProgramCount = *(int*)(fadePlayer + 0x90);
+            result.ProgramMax = *(int*)(fadePlayer + 0x94);
         }
 
-        CacheRuntimeCursorState(fadePlayer);
-        if (includeDiagnostics)
-        {
-            CaptureMessageState(ref result);
-            CaptureTownMapState(ref result);
-            CaptureUiContactState(ref result);
-            CaptureBattleGuiState(ref result);
-        }
+        CaptureMessageState(ref result);
+        CaptureTownMapState(ref result);
+        CaptureUiContactState(ref result);
+        CaptureBattleGuiState(ref result);
         return result;
     }
 
@@ -308,20 +317,8 @@ internal sealed unsafe class UnrealFadeProbe
         return true;
     }
 
-    private void CacheRuntimeCursorState(nint fadePlayer)
+    private void CacheRuntimeCursorState(bool fadeAvailable, int fadeMode)
     {
-        int fadeMode = 0;
-        bool fadeAvailable = false;
-        if (fadePlayer != 0)
-        {
-            uint value = *(uint*)(fadePlayer + 0x30);
-            if (value <= 2)
-            {
-                fadeAvailable = true;
-                fadeMode = unchecked((int)value);
-            }
-        }
-
         bool messageAvailable = TryReadLiveMessageCursorOwnerCore(out bool messageActive);
         bool actorAvailable = TryReadLiveActorUiCursorOwnerCore(out bool actorActive);
         bool battleAvailable = TryReadLiveBattleGuiCursorOwnerCore(out bool battleActive);
@@ -341,7 +338,7 @@ internal sealed unsafe class UnrealFadeProbe
         return gameThread != 0 && gameThread == Native.GetCurrentThreadId();
     }
 
-    private void TryDiscover()
+    private void TryDiscover(bool includeDiagnostics)
     {
         if (_fadePlayer.IsSet)
         {
@@ -396,7 +393,7 @@ internal sealed unsafe class UnrealFadeProbe
                 !TryResolveClass(fadeHandle, "FadePlayer", out nint liveFade))
                 continue;
 
-            _uiSubsystem = subsystemHandle;
+            _uiSubsystem = includeDiagnostics ? subsystemHandle : default;
             _fadePlayer = fadeHandle;
             if (!_foundLogged)
             {
@@ -460,8 +457,10 @@ internal sealed unsafe class UnrealFadeProbe
             }
             else if (includeDiagnostics && className == "FldManagerSubsystem")
             {
-                if (!_fieldManagers.Contains(handle))
-                    _fieldManagers.Add(handle);
+                List<UnrealTypes.ObjectHandle> candidates =
+                    _fieldManagers ??= new List<UnrealTypes.ObjectHandle>();
+                if (!candidates.Contains(handle))
+                    candidates.Add(handle);
                 if (!_fieldManagerFoundLogged)
                 {
                     _fieldManagerFoundLogged = true;
@@ -470,8 +469,10 @@ internal sealed unsafe class UnrealFadeProbe
             }
             else if (includeDiagnostics && className == "UITownMapActor")
             {
-                if (!_townMapActors.Contains(handle))
-                    _townMapActors.Add(handle);
+                List<UnrealTypes.ObjectHandle> candidates =
+                    _townMapActors ??= new List<UnrealTypes.ObjectHandle>();
+                if (!candidates.Contains(handle))
+                    candidates.Add(handle);
                 if (!_townMapFoundLogged)
                 {
                     _townMapFoundLogged = true;
@@ -561,11 +562,12 @@ internal sealed unsafe class UnrealFadeProbe
 
     private void CaptureTownMapState(ref FadeSnapshot result)
     {
-        for (int candidateIndex = _fieldManagers.Count - 1; candidateIndex >= 0; candidateIndex--)
+        List<UnrealTypes.ObjectHandle>? fieldManagers = _fieldManagers;
+        for (int candidateIndex = (fieldManagers?.Count ?? 0) - 1; candidateIndex >= 0; candidateIndex--)
         {
-            if (!TryResolveClass(_fieldManagers[candidateIndex], "FldManagerSubsystem", out nint manager))
+            if (!TryResolveClass(fieldManagers![candidateIndex], "FldManagerSubsystem", out nint manager))
             {
-                _fieldManagers.RemoveAt(candidateIndex);
+                fieldManagers.RemoveAt(candidateIndex);
                 continue;
             }
 
@@ -587,11 +589,12 @@ internal sealed unsafe class UnrealFadeProbe
         // record raw AActor flags as well so the runtime trace can establish which
         // native lifetime signal actually brackets the interactive map.
         int bestScore = int.MinValue;
-        for (int candidateIndex = _townMapActors.Count - 1; candidateIndex >= 0; candidateIndex--)
+        List<UnrealTypes.ObjectHandle>? townMapActors = _townMapActors;
+        for (int candidateIndex = (townMapActors?.Count ?? 0) - 1; candidateIndex >= 0; candidateIndex--)
         {
-            if (!TryResolveClass(_townMapActors[candidateIndex], "UITownMapActor", out nint actor))
+            if (!TryResolveClass(townMapActors![candidateIndex], "UITownMapActor", out nint actor))
             {
-                _townMapActors.RemoveAt(candidateIndex);
+                townMapActors.RemoveAt(candidateIndex);
                 continue;
             }
 
@@ -626,8 +629,8 @@ internal sealed unsafe class UnrealFadeProbe
             result.TownMapStartCamera = startCamera;
         }
 
-        result.FieldManagerCandidateCount = _fieldManagers.Count;
-        result.TownMapActorCandidateCount = _townMapActors.Count;
+        result.FieldManagerCandidateCount = fieldManagers?.Count ?? 0;
+        result.TownMapActorCandidateCount = townMapActors?.Count ?? 0;
         result.TownMapProbeStatus = result.FieldManager != 0 || result.TownMapActor != 0 ? 2 :
             Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0;
     }
@@ -807,6 +810,8 @@ internal sealed unsafe class UnrealFadeProbe
         public int Max;
     }
 }
+
+internal readonly record struct FadeRuntimeSnapshot(int Status, int Mode);
 
 internal unsafe struct FadeSnapshot
 {

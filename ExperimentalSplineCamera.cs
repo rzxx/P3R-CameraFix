@@ -64,6 +64,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private readonly Reloaded.Hooks.ReloadedII.Interfaces.IReloadedHooks _hooks;
     private readonly nint _imageBase;
     private readonly bool _diagnosticsEnabled;
+    private readonly bool _cameraInputTraceEnabled;
     private readonly CameraTransitionTrace? _transitionTrace;
     private readonly TraceMarkerRecorder? _traceMarker;
     private readonly UnrealFadeProbe? _fadeProbe;
@@ -193,7 +194,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private readonly TraceSlot[]? _traceSlots;
     private readonly StreamWriter? _traceWriter;
     private readonly Timer? _traceFlushTimer;
-    private readonly object _traceWriterLock = new();
+    private readonly object? _traceWriterLock;
     private int _traceReserved;
     private int _traceRead;
     private int _traceDropped;
@@ -206,6 +207,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _imageBase = imageBase;
         _diagnosticsEnabled = Mod.Configuration.EnableCameraTransitionTrace ||
                               Mod.Configuration.EnableSplineCameraTrace;
+        _cameraInputTraceEnabled = _diagnosticsEnabled ||
+                                   Mod.Configuration.EnableFreeCameraTrace;
 
         if (Mod.Configuration.EnableCameraTransitionTrace ||
             Mod.Configuration.EnableFreeCameraFix || Mod.Configuration.EnableSplineCameraFix)
@@ -219,6 +222,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
         if (Mod.Configuration.EnableSplineCameraTrace)
         {
+            _traceWriterLock = new object();
             int capacity = Math.Clamp(Mod.Configuration.TraceCapacity, 1024, 2_000_000);
             _traceSlots = new TraceSlot[capacity];
             string modDirectory = context.ModLoader.GetDirectoryForModId(context.ModConfig.ModId);
@@ -367,18 +371,21 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             return result;
 
         uint message = *(uint*)(messagePointer + 0x08);
-        nint virtualKey = *(nint*)(messagePointer + 0x10);
-        if (_traceMarker != null && virtualKey == VkPageUp &&
-            (message == WmKeyUp || message == WmSysKeyUp))
+        if (_traceMarker != null)
         {
-            Volatile.Write(ref _traceMarkerKeyDown, 0);
-        }
-        else if (_traceMarker != null && virtualKey == VkPageUp &&
-                 (message == WmKeyDown || message == WmSysKeyDown) &&
-                 (((ulong)*(nint*)(messagePointer + 0x18) >> 30) & 1UL) == 0 &&
-                 Interlocked.Exchange(ref _traceMarkerKeyDown, 1) == 0)
-        {
-            CaptureTraceMarker();
+            nint virtualKey = *(nint*)(messagePointer + 0x10);
+            if (virtualKey == VkPageUp &&
+                (message == WmKeyUp || message == WmSysKeyUp))
+            {
+                Volatile.Write(ref _traceMarkerKeyDown, 0);
+            }
+            else if (virtualKey == VkPageUp &&
+                     (message == WmKeyDown || message == WmSysKeyDown) &&
+                     (((ulong)*(nint*)(messagePointer + 0x18) >> 30) & 1UL) == 0 &&
+                     Interlocked.Exchange(ref _traceMarkerKeyDown, 1) == 0)
+            {
+                CaptureTraceMarker();
+            }
         }
         if (_diagnosticsEnabled && message == WmSetCursor)
             Interlocked.Increment(ref _pendingWmSetCursor);
@@ -396,9 +403,9 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         int y = *(int*)(buffer + 0x28);
         if (IsRecentCursorWarpPacket(x, y))
         {
-            Interlocked.Increment(ref _pendingWarpRejected);
             if (_diagnosticsEnabled)
             {
+                Interlocked.Increment(ref _pendingWarpRejected);
                 Volatile.Write(ref _pendingWarpX, x);
                 Volatile.Write(ref _pendingWarpY, y);
             }
@@ -409,8 +416,11 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         if (x != 0 || y != 0)
         {
             long now = Stopwatch.GetTimestamp();
-            Interlocked.CompareExchange(ref _pendingMouseFirstQpc, now, 0);
-            Volatile.Write(ref _pendingMouseLastQpc, now);
+            if (_cameraInputTraceEnabled)
+            {
+                Interlocked.CompareExchange(ref _pendingMouseFirstQpc, now, 0);
+                Volatile.Write(ref _pendingMouseLastQpc, now);
+            }
             Volatile.Write(ref _lastAcceptedRawMouseQpc, now);
             Volatile.Write(ref _lastRawInputOperation, Volatile.Read(ref _operationSequence));
         }
@@ -609,18 +619,23 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _operationSequence++;
         _frameOperationQpc = Stopwatch.GetTimestamp();
         CaptureNativeInputOwnership(operation);
-        PollTraceMarkerKey();
-        FadeSnapshot fade = _fadeProbe?.Capture(_transitionTrace != null) ?? default;
+        if (_traceMarker != null)
+            PollTraceMarkerKey();
+        FadeRuntimeSnapshot fade =
+            _fadeProbe?.CaptureRuntime(_transitionTrace != null) ?? default;
         CaptureFadeCursorState(operation, deltaTime, fade);
         _frameMouseX = Interlocked.Exchange(ref _pendingMouseX, 0);
         _frameMouseY = Interlocked.Exchange(ref _pendingMouseY, 0);
-        _frameMouseFirstQpc = Interlocked.Exchange(ref _pendingMouseFirstQpc, 0);
-        _frameMouseLastQpc = Interlocked.Exchange(ref _pendingMouseLastQpc, 0);
-        _frameWarpRejected = Interlocked.Exchange(ref _pendingWarpRejected, 0);
-        _frameWarpX = Interlocked.Exchange(ref _pendingWarpX, 0);
-        _frameWarpY = Interlocked.Exchange(ref _pendingWarpY, 0);
+        if (_cameraInputTraceEnabled)
+        {
+            _frameMouseFirstQpc = Interlocked.Exchange(ref _pendingMouseFirstQpc, 0);
+            _frameMouseLastQpc = Interlocked.Exchange(ref _pendingMouseLastQpc, 0);
+        }
         if (_diagnosticsEnabled)
         {
+            _frameWarpRejected = Interlocked.Exchange(ref _pendingWarpRejected, 0);
+            _frameWarpX = Interlocked.Exchange(ref _pendingWarpX, 0);
+            _frameWarpY = Interlocked.Exchange(ref _pendingWarpY, 0);
             _frameWmSetCursor = Interlocked.Exchange(ref _pendingWmSetCursor, 0);
             _frameSetCursorCalls = Interlocked.Exchange(ref _pendingSetCursorCalls, 0);
             _frameSetCursorZeroCalls = Interlocked.Exchange(ref _pendingSetCursorZeroCalls, 0);
@@ -630,7 +645,9 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         }
         _frameMouseSource = (_frameMouseX != 0 || _frameMouseY != 0)
             ? MouseSource.Raw
-            : _frameWarpRejected != 0 ? MouseSource.WarpRejected : MouseSource.None;
+            : _diagnosticsEnabled && _frameWarpRejected != 0
+                ? MouseSource.WarpRejected
+                : MouseSource.None;
         if (_diagnosticsEnabled)
             CaptureCursorState();
 
@@ -675,98 +692,107 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _lastOperationStickX = stickX;
         _lastOperationStickY = stickY;
 
-        CameraTransitionObservation transition = default;
         if (_transitionTrace != null)
-        {
-            transition = new CameraTransitionObservation
-            {
-                OperationSequence = _operationSequence,
-                QpcEnter = _frameOperationQpc,
-                Operation = operation,
-                DeltaTime = deltaTime,
-                IdentityBefore = _transitionTrace.CaptureIdentity(operation),
-                KernelInput = _frameKernelInput,
-                DefaultInputComponent = _frameDefaultInputComponent,
-                CurrentInputComponent = _frameCurrentInputComponent,
-                ShowMouseCursor = _frameShowMouseCursor,
-                Device = (int)next,
-                DeviceSwitch = _deviceChangedThisFrame ? 1 : 0,
-                MouseSource = (int)_frameMouseSource,
-                MouseX = _frameMouseX,
-                MouseY = _frameMouseY,
-                RawFirstQpc = _frameMouseFirstQpc,
-                RawLastQpc = _frameMouseLastQpc,
-                CursorVisibleBefore = _cursorVisible,
-                CursorXBefore = _cursorX,
-                CursorYBefore = _cursorY,
-                CursorHandleBefore = _cursorHandle,
-                WmSetCursorPrevious = _frameWmSetCursor,
-                SetCursorPrevious = _frameSetCursorCalls,
-                SetCursorZeroPrevious = _frameSetCursorZeroCalls,
-                SetCursorNonzeroPrevious = _frameSetCursorNonzeroCalls,
-                SetCursorSuppressedPrevious = _frameSetCursorSuppressedCalls,
-                ShowCursorPrevious = _frameShowCursorCalls,
-                MessageWindow = Volatile.Read(ref _messageWindow),
-            };
-        }
-
-        _operationTickHook!.OriginalFunction(operation, deltaTime);
-
-        if (_transitionTrace != null)
-        {
-            transition.QpcExit = Stopwatch.GetTimestamp();
-            CaptureCursorState();
-            transition.CursorVisibleAfter = _cursorVisible;
-            transition.CursorXAfter = _cursorX;
-            transition.CursorYAfter = _cursorY;
-            transition.CursorHandleAfter = _cursorHandle;
-            transition.SetCursorPendingAfter = Volatile.Read(ref _pendingSetCursorCalls);
-            transition.SetCursorZeroPendingAfter = Volatile.Read(ref _pendingSetCursorZeroCalls);
-            transition.SetCursorNonzeroPendingAfter = Volatile.Read(ref _pendingSetCursorNonzeroCalls);
-            transition.SetCursorSuppressedPendingAfter = Volatile.Read(ref _pendingSetCursorSuppressedCalls);
-            transition.LastSetCursorRequested = Volatile.Read(ref _lastSetCursorRequested);
-            transition.LastSetCursorApplied = Volatile.Read(ref _lastSetCursorApplied);
-            transition.LastSetCursorQpc = Volatile.Read(ref _lastSetCursorQpc);
-            transition.ShowCursorPendingAfter = Volatile.Read(ref _pendingShowCursorCalls);
-            transition.LastShowCursorShow = Volatile.Read(ref _lastShowCursorShow);
-            transition.LastShowCursorResult = Volatile.Read(ref _lastShowCursorResult);
-            transition.LastShowCursorQpc = Volatile.Read(ref _lastShowCursorQpc);
-            _transitionTrace.Capture(transition, fade);
-        }
+            InvokeOperationWithTransitionTrace(operation, deltaTime, next);
+        else
+            _operationTickHook!.OriginalFunction(operation, deltaTime);
 
         _frameMouseX = 0;
         _frameMouseY = 0;
-        _frameMouseFirstQpc = 0;
-        _frameMouseLastQpc = 0;
+        if (_cameraInputTraceEnabled)
+        {
+            _frameMouseFirstQpc = 0;
+            _frameMouseLastQpc = 0;
+            _frameCameraLock = 0;
+        }
         _frameOperationQpc = 0;
         _frameOperatorKeyState = 0;
         _frameOperatorState = 0;
-        _frameOperatorNextState = 0;
-        _frameCameraLock = 0;
-        _frameKernelInput = 0;
-        _frameDefaultInputComponent = 0;
-        _frameCurrentInputComponent = 0;
-        _frameShowMouseCursor = 0;
-        _framePlayerInput = 0;
-        _frameWarpRejected = 0;
-        _frameWarpX = 0;
-        _frameWarpY = 0;
-        _frameWmSetCursor = 0;
-        _frameSetCursorCalls = 0;
-        _frameSetCursorZeroCalls = 0;
-        _frameSetCursorNonzeroCalls = 0;
-        _frameSetCursorSuppressedCalls = 0;
-        _frameShowCursorCalls = 0;
+        if (_diagnosticsEnabled)
+        {
+            _frameOperatorNextState = 0;
+            _frameKernelInput = 0;
+            _frameDefaultInputComponent = 0;
+            _frameCurrentInputComponent = 0;
+            _frameShowMouseCursor = 0;
+            _framePlayerInput = 0;
+            _frameWarpRejected = 0;
+            _frameWarpX = 0;
+            _frameWarpY = 0;
+            _frameWmSetCursor = 0;
+            _frameSetCursorCalls = 0;
+            _frameSetCursorZeroCalls = 0;
+            _frameSetCursorNonzeroCalls = 0;
+            _frameSetCursorSuppressedCalls = 0;
+            _frameShowCursorCalls = 0;
+        }
         _frameMouseSource = MouseSource.None;
         _mouseBecameActive = false;
         _deviceChangedThisFrame = false;
     }
 
+    private void InvokeOperationWithTransitionTrace(
+        nint operation,
+        float deltaTime,
+        InputDevice device)
+    {
+        CameraTransitionTrace trace = _transitionTrace!;
+        FadeSnapshot fade = _fadeProbe?.CaptureDiagnostics() ?? default;
+        var transition = new CameraTransitionObservation
+        {
+            OperationSequence = _operationSequence,
+            QpcEnter = _frameOperationQpc,
+            Operation = operation,
+            DeltaTime = deltaTime,
+            IdentityBefore = trace.CaptureIdentity(operation),
+            KernelInput = _frameKernelInput,
+            DefaultInputComponent = _frameDefaultInputComponent,
+            CurrentInputComponent = _frameCurrentInputComponent,
+            ShowMouseCursor = _frameShowMouseCursor,
+            Device = (int)device,
+            DeviceSwitch = _deviceChangedThisFrame ? 1 : 0,
+            MouseSource = (int)_frameMouseSource,
+            MouseX = _frameMouseX,
+            MouseY = _frameMouseY,
+            RawFirstQpc = _frameMouseFirstQpc,
+            RawLastQpc = _frameMouseLastQpc,
+            CursorVisibleBefore = _cursorVisible,
+            CursorXBefore = _cursorX,
+            CursorYBefore = _cursorY,
+            CursorHandleBefore = _cursorHandle,
+            WmSetCursorPrevious = _frameWmSetCursor,
+            SetCursorPrevious = _frameSetCursorCalls,
+            SetCursorZeroPrevious = _frameSetCursorZeroCalls,
+            SetCursorNonzeroPrevious = _frameSetCursorNonzeroCalls,
+            SetCursorSuppressedPrevious = _frameSetCursorSuppressedCalls,
+            ShowCursorPrevious = _frameShowCursorCalls,
+            MessageWindow = Volatile.Read(ref _messageWindow),
+        };
+
+        _operationTickHook!.OriginalFunction(operation, deltaTime);
+
+        transition.QpcExit = Stopwatch.GetTimestamp();
+        CaptureCursorState();
+        transition.CursorVisibleAfter = _cursorVisible;
+        transition.CursorXAfter = _cursorX;
+        transition.CursorYAfter = _cursorY;
+        transition.CursorHandleAfter = _cursorHandle;
+        transition.SetCursorPendingAfter = Volatile.Read(ref _pendingSetCursorCalls);
+        transition.SetCursorZeroPendingAfter = Volatile.Read(ref _pendingSetCursorZeroCalls);
+        transition.SetCursorNonzeroPendingAfter = Volatile.Read(ref _pendingSetCursorNonzeroCalls);
+        transition.SetCursorSuppressedPendingAfter = Volatile.Read(ref _pendingSetCursorSuppressedCalls);
+        transition.LastSetCursorRequested = Volatile.Read(ref _lastSetCursorRequested);
+        transition.LastSetCursorApplied = Volatile.Read(ref _lastSetCursorApplied);
+        transition.LastSetCursorQpc = Volatile.Read(ref _lastSetCursorQpc);
+        transition.ShowCursorPendingAfter = Volatile.Read(ref _pendingShowCursorCalls);
+        transition.LastShowCursorShow = Volatile.Read(ref _lastShowCursorShow);
+        transition.LastShowCursorResult = Volatile.Read(ref _lastShowCursorResult);
+        transition.LastShowCursorQpc = Volatile.Read(ref _lastShowCursorQpc);
+        trace.Capture(transition, fade);
+    }
+
     private void PollTraceMarkerKey()
     {
-        if (_traceMarker == null)
-            return;
-
         bool down = (Native.GetAsyncKeyState(VkPageUp) & 0x8000) != 0;
         int previous = Interlocked.Exchange(ref _traceMarkerKeyDown, down ? 1 : 0);
         if (down && previous == 0)
@@ -789,8 +815,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         float nativeY = ClampNative(*(float*)(input + 4));
         float outputBeforeX = ClampFinite(*(float*)(state + 0x24));
         float outputBeforeY = ClampFinite(*(float*)(state + 0x28));
-        float degreesBeforePitch = *(float*)(hit + 0x2A0);
-        float degreesBeforeYaw = *(float*)(hit + 0x2A4);
         InputDevice device = (InputDevice)Volatile.Read(ref _activeDevice);
 
         // WM_INPUT registration can disappear across menus/maps. P3R's native
@@ -980,6 +1004,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         if (_traceSlots == null)
             return;
 
+        float degreesBeforePitch = *(float*)(hit + 0x2A0);
+        float degreesBeforeYaw = *(float*)(hit + 0x2A4);
         long traceQpc = Stopwatch.GetTimestamp();
         var trace = new TraceSlot
         {
@@ -1078,7 +1104,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         // A completed call without an interpolator record must not inherit a
         // record from an earlier frame or camera state.
         _pendingSplineFrameReady = false;
-        _pendingTraceReady = false;
+        if (_traceSlots != null)
+            _pendingTraceReady = false;
         byte result = _splineUpdateHook!.OriginalFunction(hit, deltaTime, sourceTransform, outputTransform);
 
         bool matchingFrame = _pendingSplineFrameReady &&
@@ -1096,7 +1123,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             UpdateRailMotion(hit, deltaTime, viewX, viewY, viewZ, railAngle0, railAngle1);
         }
 
-        if (_pendingTraceReady && _pendingTrace.Hit == hit && _pendingTrace.OperationSequence == _operationSequence)
+        if (_traceSlots != null && _pendingTraceReady &&
+            _pendingTrace.Hit == hit && _pendingTrace.OperationSequence == _operationSequence)
         {
             TraceSlot trace = _pendingTrace;
             if (outputTransform != 0)
@@ -1120,7 +1148,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             ReserveTrace(trace);
         }
         _pendingSplineFrameReady = false;
-        _pendingTraceReady = false;
+        if (_traceSlots != null)
+            _pendingTraceReady = false;
         return result;
     }
 
@@ -1480,7 +1509,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private void FlushTrace()
     {
         if (_traceWriter == null || _traceDisposed) return;
-        lock (_traceWriterLock)
+        lock (_traceWriterLock!)
         {
             if (!_traceDisposed) DrainTraceLocked();
         }
@@ -1593,7 +1622,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _traceFlushTimer?.Change(Timeout.Infinite, Timeout.Infinite);
         if (_traceWriter != null)
         {
-            lock (_traceWriterLock)
+            lock (_traceWriterLock!)
             {
                 if (!_traceDisposed)
                 {
@@ -1678,19 +1707,28 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
         _frameOperatorKeyState = *(int*)(holder + 0x280);
         _frameOperatorState = *(int*)(holder + 0x284);
-        _frameOperatorNextState = *(int*)(holder + 0x288);
-        _frameCameraLock = *(byte*)(operation + 0xC0);
+        if (_diagnosticsEnabled)
+            _frameOperatorNextState = *(int*)(holder + 0x288);
+        if (_cameraInputTraceEnabled)
+            _frameCameraLock = *(byte*)(operation + 0xC0);
         int previousKeyState = Volatile.Read(ref _lastOperatorKeyState);
         long ownershipQpc = Stopwatch.GetTimestamp();
         if (previousKeyState == 3 && _frameOperatorKeyState != 3)
             Volatile.Write(ref _lastNativeInputDisabledQpc, ownershipQpc);
         Volatile.Write(ref _lastOperatorKeyState, _frameOperatorKeyState);
         Volatile.Write(ref _lastOperatorState, _frameOperatorState);
-        Volatile.Write(ref _lastOperatorNextState, _frameOperatorNextState);
-        Volatile.Write(ref _lastCameraLock, _frameCameraLock);
+        if (_diagnosticsEnabled)
+        {
+            Volatile.Write(ref _lastOperatorNextState, _frameOperatorNextState);
+            Volatile.Write(ref _lastCameraLock, _frameCameraLock);
+        }
         Volatile.Write(ref _lastNativeOwnershipQpc, ownershipQpc);
         if (_frameOperatorKeyState == 3)
             Volatile.Write(ref _splineInputEnabledSinceResume, 1);
+
+        if (!_diagnosticsEnabled)
+            return;
+
         nint kernelInput = *(nint*)(holder + 0x268);
         _frameKernelInput = kernelInput;
         if (kernelInput == 0)
@@ -1702,10 +1740,10 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _framePlayerInput = *(nint*)(kernelInput + 0x348);
     }
 
-    private void CaptureFadeCursorState(nint operation, float deltaTime, in FadeSnapshot fade)
+    private void CaptureFadeCursorState(nint operation, float deltaTime, in FadeRuntimeSnapshot fade)
     {
         Volatile.Write(ref _lastFadeProbeStatus, fade.Status);
-        Volatile.Write(ref _lastFadeMode, unchecked((int)fade.Mode));
+        Volatile.Write(ref _lastFadeMode, fade.Mode);
 
         long now = _frameOperationQpc != 0 ? _frameOperationQpc : Stopwatch.GetTimestamp();
         if (fade.Status == 2 && fade.Mode != 0)

@@ -47,7 +47,7 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
     private readonly TraceSlot[]? _traceSlots;
     private readonly StreamWriter? _traceWriter;
     private readonly Timer? _traceFlushTimer;
-    private readonly object _traceWriterLock = new();
+    private readonly object? _traceWriterLock;
     private int _traceReserved;
     private int _traceRead;
     private int _traceDropped;
@@ -64,6 +64,7 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
 
         if (Mod.Configuration.EnableFreeCameraTrace)
         {
+            _traceWriterLock = new object();
             int capacity = Math.Clamp(Mod.Configuration.TraceCapacity, 1024, 2_000_000);
             _traceSlots = new TraceSlot[capacity];
             string modDirectory = context.ModLoader.GetDirectoryForModId(context.ModConfig.ModId);
@@ -417,7 +418,7 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
     private void FlushTrace()
     {
         if (_traceWriter == null || _traceDisposed) return;
-        lock (_traceWriterLock)
+        lock (_traceWriterLock!)
         {
             if (!_traceDisposed) DrainTraceLocked();
         }
@@ -512,7 +513,7 @@ internal sealed unsafe class ExperimentalFreeCamera : IDisposable
         _traceFlushTimer?.Change(Timeout.Infinite, Timeout.Infinite);
         if (_traceWriter != null)
         {
-            lock (_traceWriterLock)
+            lock (_traceWriterLock!)
             {
                 if (!_traceDisposed)
                 {

@@ -46,10 +46,8 @@ public class Mod : ModBase
                     _experimentalSplineCamera = new ExperimentalSplineCamera(context, baseAddress);
                 }
 
-                // The live free-camera update is also the safe place to apply
-                // native behavior parameters. It replaces the former
-                // background FUObjectArray scan even when replacement input is
-                // disabled.
+                // Native behavior parameters are applied from this live
+                // camera callback even when replacement input is disabled.
                 _experimentalFreeCamera = new ExperimentalFreeCamera(
                     context, baseAddress, _experimentalSplineCamera);
             }
