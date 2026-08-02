@@ -16,27 +16,34 @@ internal sealed unsafe class UnrealFadeProbe
     private const string FNameAppendStringSignature =
         "48 89 ?? ?? ?? E8 ?? ?? ?? ?? 48 8B ?? ?? 48 85 ?? 75 ?? 48 8B ?? ?? ?? 48 8B ??";
 
-    private const int ObjectItemSize = 0x18;
-    private const int ObjectsPerChunk = 0x10000;
     private const int FadeWordCount = 24; // UFadePlayer +0x28 through +0x84.
     private const int UiContactWordCount = 100; // UUIContactManager +0x48 through +0x1D4.
 
     private readonly Reloaded.Mod.Interfaces.ILogger _logger;
     private readonly nint _imageBase;
-    private readonly Dictionary<nint, string> _classNames = new();
+    private readonly Dictionary<ulong, string> _classNames = new();
     private nint _gObjects;
     private nint _appendString;
-    private nint _uiSubsystem;
-    private nint _fadePlayer;
+    private UnrealTypes.ObjectHandle _uiSubsystem;
+    private UnrealTypes.ObjectHandle _fadePlayer;
     private int _scanIndex = -1;
     private int _messageScanIndex = -1;
     private long _nextScanQpc;
     private long _nextMessageScanQpc;
-    private readonly List<nint> _messageManagers = new();
-    private readonly List<nint> _fieldManagers = new();
-    private readonly List<nint> _townMapActors = new();
-    private readonly List<nint> _uiContactManagers = new();
-    private readonly List<nint> _battleGuiStateManagers = new();
+    private readonly List<UnrealTypes.ObjectHandle> _messageManagers = new();
+    private readonly List<UnrealTypes.ObjectHandle> _fieldManagers = new();
+    private readonly List<UnrealTypes.ObjectHandle> _townMapActors = new();
+    private readonly List<UnrealTypes.ObjectHandle> _uiContactManagers = new();
+    private readonly List<UnrealTypes.ObjectHandle> _battleGuiStateManagers = new();
+    private uint _gameThreadId;
+    private int _lastFadeAvailable;
+    private int _lastFadeMode;
+    private int _lastMessageAvailable;
+    private int _lastMessageActive;
+    private int _lastActorUiAvailable;
+    private int _lastActorUiActive;
+    private int _lastBattleGuiAvailable;
+    private int _lastBattleGuiActive;
     private bool _invalidObjectsLogged;
     private bool _foundLogged;
     private bool _messageFoundLogged;
@@ -79,67 +86,88 @@ internal sealed unsafe class UnrealFadeProbe
         });
     }
 
-    public FadeSnapshot Capture()
+    public FadeSnapshot Capture(bool includeDiagnostics)
     {
+        Volatile.Write(ref _gameThreadId, Native.GetCurrentThreadId());
         TryDiscover();
-        DiscoverMessageManagers();
+        DiscoverMessageManagers(includeDiagnostics);
+
+        TryResolveClass(_uiSubsystem, "UISubsystem", out nint uiSubsystem);
+        TryResolveClass(_fadePlayer, "FadePlayer", out nint fadePlayer);
 
         var result = new FadeSnapshot
         {
-            Status = _fadePlayer != 0 ? 2 : _gObjects != 0 && _appendString != 0 ? 1 : 0,
-            UiSubsystem = _uiSubsystem,
-            FadePlayer = _fadePlayer,
+            Status = fadePlayer != 0 ? 2 : _gObjects != 0 && _appendString != 0 ? 1 : 0,
+            UiSubsystem = uiSubsystem,
+            FadePlayer = fadePlayer,
         };
 
-        nint fade = _fadePlayer;
-        if (fade != 0)
+        if (fadePlayer != 0)
         {
-            for (int index = 0; index < FadeWordCount; index++)
-                result.SetWord(index, *(uint*)(fade + 0x28 + index * 4));
+            if (includeDiagnostics)
+            {
+                for (int index = 0; index < FadeWordCount; index++)
+                    result.SetWord(index, *(uint*)(fadePlayer + 0x28 + index * 4));
 
-            result.Programs = *(nint*)(fade + 0x88);
-            result.ProgramCount = *(int*)(fade + 0x90);
-            result.ProgramMax = *(int*)(fade + 0x94);
+                result.Programs = *(nint*)(fadePlayer + 0x88);
+                result.ProgramCount = *(int*)(fadePlayer + 0x90);
+                result.ProgramMax = *(int*)(fadePlayer + 0x94);
+            }
+            else
+            {
+                result.SetWord(2, *(uint*)(fadePlayer + 0x30));
+            }
         }
 
-        CaptureMessageState(ref result);
-        CaptureTownMapState(ref result);
-        CaptureUiContactState(ref result);
-        CaptureBattleGuiState(ref result);
+        CacheRuntimeCursorState(fadePlayer);
+        if (includeDiagnostics)
+        {
+            CaptureMessageState(ref result);
+            CaptureTownMapState(ref result);
+            CaptureUiContactState(ref result);
+            CaptureBattleGuiState(ref result);
+        }
         return result;
     }
 
     /// <summary>
-    /// Reads only the already-discovered FadePlayer mode. Unlike Capture this
-    /// does not scan the object array or call any UE function, so the cursor
-    /// hook can use the native fade lifecycle even while field-operation ticks
-    /// are stalled or have stopped during a return to the title screen.
+    /// Resolves the already-discovered FadePlayer through its object-array
+    /// handle. Calls on other threads use the last game-thread snapshot rather
+    /// than traversing UObject state concurrently with garbage collection.
     /// </summary>
     public bool TryReadLiveMode(out int mode)
     {
-        mode = 0;
-        nint fade = Volatile.Read(ref _fadePlayer);
-        if (fade == 0)
-            return false;
+        if (!IsGameThread())
+        {
+            mode = Volatile.Read(ref _lastFadeMode);
+            return Volatile.Read(ref _lastFadeAvailable) != 0;
+        }
 
-        uint value = *(uint*)(fade + 0x30);
-        if (value > 2)
-            return false;
-
-        mode = unchecked((int)value);
-        return true;
+        return TryReadLiveModeCore(out mode);
     }
 
     public bool TryReadLiveMessageCursorOwner(out bool active)
     {
+        if (!IsGameThread())
+        {
+            active = Volatile.Read(ref _lastMessageActive) != 0;
+            return Volatile.Read(ref _lastMessageAvailable) != 0;
+        }
+
+        return TryReadLiveMessageCursorOwnerCore(out active);
+    }
+
+    private bool TryReadLiveMessageCursorOwnerCore(out bool active)
+    {
         active = false;
         bool available = false;
-        int candidateCount = _messageManagers.Count;
-        for (int candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
+        for (int candidateIndex = _messageManagers.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
-            nint manager = _messageManagers[candidateIndex];
-            if (!IsClass(manager, "MsgManager"))
+            if (!TryResolveClass(_messageManagers[candidateIndex], "MsgManager", out nint manager))
+            {
+                _messageManagers.RemoveAt(candidateIndex);
                 continue;
+            }
 
             nint procList = *(nint*)(manager + 0x38);
             int procCount = *(int*)(manager + 0x40);
@@ -170,12 +198,27 @@ internal sealed unsafe class UnrealFadeProbe
     /// </summary>
     public bool TryReadLiveActorUiCursorOwner(out bool active)
     {
+        if (!IsGameThread())
+        {
+            active = Volatile.Read(ref _lastActorUiActive) != 0;
+            return Volatile.Read(ref _lastActorUiAvailable) != 0;
+        }
+
+        return TryReadLiveActorUiCursorOwnerCore(out active);
+    }
+
+    private bool TryReadLiveActorUiCursorOwnerCore(out bool active)
+    {
         active = false;
         bool available = false;
-        int candidateCount = _uiContactManagers.Count;
-        for (int candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
+        for (int candidateIndex = _uiContactManagers.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
-            nint manager = _uiContactManagers[candidateIndex];
+            if (!TryResolveClass(_uiContactManagers[candidateIndex], "UIContactManager", out nint manager))
+            {
+                _uiContactManagers.RemoveAt(candidateIndex);
+                continue;
+            }
+
             nint actorList = *(nint*)(manager + 0x38);
             int actorCount = *(int*)(manager + 0x40);
             int actorMax = *(int*)(manager + 0x44);
@@ -213,12 +256,27 @@ internal sealed unsafe class UnrealFadeProbe
     /// </summary>
     public bool TryReadLiveBattleGuiCursorOwner(out bool active)
     {
+        if (!IsGameThread())
+        {
+            active = Volatile.Read(ref _lastBattleGuiActive) != 0;
+            return Volatile.Read(ref _lastBattleGuiAvailable) != 0;
+        }
+
+        return TryReadLiveBattleGuiCursorOwnerCore(out active);
+    }
+
+    private bool TryReadLiveBattleGuiCursorOwnerCore(out bool active)
+    {
         active = false;
         bool available = false;
-        int candidateCount = _battleGuiStateManagers.Count;
-        for (int candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
+        for (int candidateIndex = _battleGuiStateManagers.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
-            nint manager = _battleGuiStateManagers[candidateIndex];
+            if (!TryResolveClass(_battleGuiStateManagers[candidateIndex], "BtlGuiStateManager", out nint manager))
+            {
+                _battleGuiStateManagers.RemoveAt(candidateIndex);
+                continue;
+            }
+
             if ((*(uint*)(manager + 0x5C) & (1u << 4)) != 0)
                 continue;
 
@@ -236,16 +294,62 @@ internal sealed unsafe class UnrealFadeProbe
         return available;
     }
 
+    private bool TryReadLiveModeCore(out int mode)
+    {
+        mode = 0;
+        if (!TryResolveClass(_fadePlayer, "FadePlayer", out nint fade))
+            return false;
+
+        uint value = *(uint*)(fade + 0x30);
+        if (value > 2)
+            return false;
+
+        mode = unchecked((int)value);
+        return true;
+    }
+
+    private void CacheRuntimeCursorState(nint fadePlayer)
+    {
+        int fadeMode = 0;
+        bool fadeAvailable = false;
+        if (fadePlayer != 0)
+        {
+            uint value = *(uint*)(fadePlayer + 0x30);
+            if (value <= 2)
+            {
+                fadeAvailable = true;
+                fadeMode = unchecked((int)value);
+            }
+        }
+
+        bool messageAvailable = TryReadLiveMessageCursorOwnerCore(out bool messageActive);
+        bool actorAvailable = TryReadLiveActorUiCursorOwnerCore(out bool actorActive);
+        bool battleAvailable = TryReadLiveBattleGuiCursorOwnerCore(out bool battleActive);
+        Volatile.Write(ref _lastFadeAvailable, fadeAvailable ? 1 : 0);
+        Volatile.Write(ref _lastFadeMode, fadeMode);
+        Volatile.Write(ref _lastMessageAvailable, messageAvailable ? 1 : 0);
+        Volatile.Write(ref _lastMessageActive, messageActive ? 1 : 0);
+        Volatile.Write(ref _lastActorUiAvailable, actorAvailable ? 1 : 0);
+        Volatile.Write(ref _lastActorUiActive, actorActive ? 1 : 0);
+        Volatile.Write(ref _lastBattleGuiAvailable, battleAvailable ? 1 : 0);
+        Volatile.Write(ref _lastBattleGuiActive, battleActive ? 1 : 0);
+    }
+
+    private bool IsGameThread()
+    {
+        uint gameThread = Volatile.Read(ref _gameThreadId);
+        return gameThread != 0 && gameThread == Native.GetCurrentThreadId();
+    }
+
     private void TryDiscover()
     {
-        if (_fadePlayer != 0)
+        if (_fadePlayer.IsSet)
         {
-            nint fadeClass = *(nint*)(_fadePlayer + 0x10);
-            if (fadeClass != 0 && GetClassName(fadeClass) == "FadePlayer")
+            if (TryResolveClass(_fadePlayer, "FadePlayer", out _))
                 return;
 
-            _fadePlayer = 0;
-            _uiSubsystem = 0;
+            _fadePlayer = default;
+            _uiSubsystem = default;
             _scanIndex = -1;
         }
 
@@ -279,8 +383,8 @@ internal sealed unsafe class UnrealFadeProbe
         int remaining = 2048;
         while (_scanIndex >= 0 && remaining-- > 0)
         {
-            nint instance = GetObject(chunkTable, chunkCount, _scanIndex--);
-            if (instance == 0)
+            int objectIndex = _scanIndex--;
+            if (!UnrealTypes.TryGetObject(objects, objectIndex, out UnrealTypes.ObjectHandle subsystemHandle, out nint instance))
                 continue;
 
             nint instanceClass = *(nint*)(instance + 0x10);
@@ -288,19 +392,16 @@ internal sealed unsafe class UnrealFadeProbe
                 continue;
 
             nint fade = *(nint*)(instance + 0x60);
-            if (fade == 0)
+            if (!UnrealTypes.TryCreateObjectHandle(objects, fade, out UnrealTypes.ObjectHandle fadeHandle) ||
+                !TryResolveClass(fadeHandle, "FadePlayer", out nint liveFade))
                 continue;
 
-            nint fadeClass = *(nint*)(fade + 0x10);
-            if (fadeClass == 0 || GetClassName(fadeClass) != "FadePlayer")
-                continue;
-
-            _uiSubsystem = instance;
-            _fadePlayer = fade;
+            _uiSubsystem = subsystemHandle;
+            _fadePlayer = fadeHandle;
             if (!_foundLogged)
             {
                 _foundLogged = true;
-                _logger.WriteLine($"[P3R CamFix] Fade probe active: UISubsystem=0x{instance:X}, FadePlayer=0x{fade:X}.");
+                _logger.WriteLine($"[P3R CamFix] Fade probe active: UISubsystem=0x{instance:X}, FadePlayer=0x{liveFade:X}.");
             }
             return;
         }
@@ -312,7 +413,7 @@ internal sealed unsafe class UnrealFadeProbe
         }
     }
 
-    private void DiscoverMessageManagers()
+    private void DiscoverMessageManagers(bool includeDiagnostics)
     {
         nint objects = Volatile.Read(ref _gObjects);
         nint append = Volatile.Read(ref _appendString);
@@ -338,8 +439,8 @@ internal sealed unsafe class UnrealFadeProbe
         int remaining = 2048;
         while (_messageScanIndex >= 0 && remaining-- > 0)
         {
-            nint instance = GetObject(chunkTable, chunkCount, _messageScanIndex--);
-            if (instance == 0)
+            int objectIndex = _messageScanIndex--;
+            if (!UnrealTypes.TryGetObject(objects, objectIndex, out UnrealTypes.ObjectHandle handle, out nint instance))
                 continue;
 
             nint instanceClass = *(nint*)(instance + 0x10);
@@ -349,28 +450,28 @@ internal sealed unsafe class UnrealFadeProbe
             string className = GetClassName(instanceClass);
             if (className == "MsgManager")
             {
-                if (!_messageManagers.Contains(instance))
-                    _messageManagers.Add(instance);
+                if (!_messageManagers.Contains(handle))
+                    _messageManagers.Add(handle);
                 if (!_messageFoundLogged)
                 {
                     _messageFoundLogged = true;
                     _logger.WriteLine($"[P3R CamFix] Message probe active: MsgManager=0x{instance:X}.");
                 }
             }
-            else if (className == "FldManagerSubsystem")
+            else if (includeDiagnostics && className == "FldManagerSubsystem")
             {
-                if (!_fieldManagers.Contains(instance))
-                    _fieldManagers.Add(instance);
+                if (!_fieldManagers.Contains(handle))
+                    _fieldManagers.Add(handle);
                 if (!_fieldManagerFoundLogged)
                 {
                     _fieldManagerFoundLogged = true;
                     _logger.WriteLine($"[P3R CamFix] Town-map probe: FldManagerSubsystem=0x{instance:X}.");
                 }
             }
-            else if (className == "UITownMapActor")
+            else if (includeDiagnostics && className == "UITownMapActor")
             {
-                if (!_townMapActors.Contains(instance))
-                    _townMapActors.Add(instance);
+                if (!_townMapActors.Contains(handle))
+                    _townMapActors.Add(handle);
                 if (!_townMapFoundLogged)
                 {
                     _townMapFoundLogged = true;
@@ -379,8 +480,8 @@ internal sealed unsafe class UnrealFadeProbe
             }
             else if (className == "UIContactManager")
             {
-                if (!_uiContactManagers.Contains(instance))
-                    _uiContactManagers.Add(instance);
+                if (!_uiContactManagers.Contains(handle))
+                    _uiContactManagers.Add(handle);
                 if (!_uiContactFoundLogged)
                 {
                     _uiContactFoundLogged = true;
@@ -389,8 +490,8 @@ internal sealed unsafe class UnrealFadeProbe
             }
             else if (className == "BtlGuiStateManager")
             {
-                if (!_battleGuiStateManagers.Contains(instance))
-                    _battleGuiStateManagers.Add(instance);
+                if (!_battleGuiStateManagers.Contains(handle))
+                    _battleGuiStateManagers.Add(handle);
                 if (!_battleGuiFoundLogged)
                 {
                     _battleGuiFoundLogged = true;
@@ -408,12 +509,13 @@ internal sealed unsafe class UnrealFadeProbe
 
     private void CaptureMessageState(ref FadeSnapshot result)
     {
-        result.MessageManagerCandidateCount = _messageManagers.Count;
-        foreach (nint manager in _messageManagers)
+        for (int candidateIndex = _messageManagers.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
-            nint managerClass = *(nint*)(manager + 0x10);
-            if (managerClass == 0 || GetClassName(managerClass) != "MsgManager")
+            if (!TryResolveClass(_messageManagers[candidateIndex], "MsgManager", out nint manager))
+            {
+                _messageManagers.RemoveAt(candidateIndex);
                 continue;
+            }
 
             nint procList = *(nint*)(manager + 0x38);
             int procCount = *(int*)(manager + 0x40);
@@ -452,20 +554,20 @@ internal sealed unsafe class UnrealFadeProbe
             result.MessageFirstSelect = firstProc == 0 ? 0 : *(nint*)(firstProc + 0x50);
         }
 
+        result.MessageManagerCandidateCount = _messageManagers.Count;
         result.MessageProbeStatus = result.MessageManager != 0 ? 2 :
             Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0;
     }
 
     private void CaptureTownMapState(ref FadeSnapshot result)
     {
-        result.FieldManagerCandidateCount = _fieldManagers.Count;
-        result.TownMapActorCandidateCount = _townMapActors.Count;
-
-        foreach (nint manager in _fieldManagers)
+        for (int candidateIndex = _fieldManagers.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
-            nint managerClass = *(nint*)(manager + 0x10);
-            if (managerClass == 0 || GetClassName(managerClass) != "FldManagerSubsystem")
+            if (!TryResolveClass(_fieldManagers[candidateIndex], "FldManagerSubsystem", out nint manager))
+            {
+                _fieldManagers.RemoveAt(candidateIndex);
                 continue;
+            }
 
             nint largeMapActor = *(nint*)(manager + 0x158);
             bool classMatches = IsClass(largeMapActor, "UITownMapActor");
@@ -485,10 +587,13 @@ internal sealed unsafe class UnrealFadeProbe
         // record raw AActor flags as well so the runtime trace can establish which
         // native lifetime signal actually brackets the interactive map.
         int bestScore = int.MinValue;
-        foreach (nint actor in _townMapActors)
+        for (int candidateIndex = _townMapActors.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
-            if (!IsClass(actor, "UITownMapActor"))
+            if (!TryResolveClass(_townMapActors[candidateIndex], "UITownMapActor", out nint actor))
+            {
+                _townMapActors.RemoveAt(candidateIndex);
                 continue;
+            }
 
             uint flags58 = *(uint*)(actor + 0x58);
             uint flags5C = *(uint*)(actor + 0x5C);
@@ -521,8 +626,21 @@ internal sealed unsafe class UnrealFadeProbe
             result.TownMapStartCamera = startCamera;
         }
 
+        result.FieldManagerCandidateCount = _fieldManagers.Count;
+        result.TownMapActorCandidateCount = _townMapActors.Count;
         result.TownMapProbeStatus = result.FieldManager != 0 || result.TownMapActor != 0 ? 2 :
             Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0;
+    }
+
+    private bool TryResolveClass(
+        UnrealTypes.ObjectHandle handle,
+        string expectedName,
+        out nint instance)
+    {
+        if (!UnrealTypes.TryResolveObject(Volatile.Read(ref _gObjects), handle, out instance))
+            return false;
+
+        return IsClass(instance, expectedName);
     }
 
     private bool IsClass(nint instance, string expectedName)
@@ -535,11 +653,13 @@ internal sealed unsafe class UnrealFadeProbe
 
     private void CaptureUiContactState(ref FadeSnapshot result)
     {
-        result.UiContactManagerCandidateCount = _uiContactManagers.Count;
-        foreach (nint manager in _uiContactManagers)
+        for (int candidateIndex = _uiContactManagers.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
-            if (!IsClass(manager, "UIContactManager"))
+            if (!TryResolveClass(_uiContactManagers[candidateIndex], "UIContactManager", out nint manager))
+            {
+                _uiContactManagers.RemoveAt(candidateIndex);
                 continue;
+            }
 
             nint actorList = *(nint*)(manager + 0x38);
             int actorCount = *(int*)(manager + 0x40);
@@ -590,15 +710,21 @@ internal sealed unsafe class UnrealFadeProbe
             result.UiContactActorHash = hash;
         }
 
+        result.UiContactManagerCandidateCount = _uiContactManagers.Count;
         result.UiContactProbeStatus = result.UiContactManager != 0 ? 2 :
             Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0;
     }
 
     private void CaptureBattleGuiState(ref FadeSnapshot result)
     {
-        result.BattleGuiManagerCandidateCount = _battleGuiStateManagers.Count;
-        foreach (nint manager in _battleGuiStateManagers)
+        for (int candidateIndex = _battleGuiStateManagers.Count - 1; candidateIndex >= 0; candidateIndex--)
         {
+            if (!TryResolveClass(_battleGuiStateManagers[candidateIndex], "BtlGuiStateManager", out nint manager))
+            {
+                _battleGuiStateManagers.RemoveAt(candidateIndex);
+                continue;
+            }
+
             uint flags58 = *(uint*)(manager + 0x58);
             uint flags5C = *(uint*)(manager + 0x5C);
             bool destroying = (flags5C & (1u << 4)) != 0;
@@ -630,17 +756,19 @@ internal sealed unsafe class UnrealFadeProbe
             result.BattleGuiFlags5C = flags5C;
         }
 
+        result.BattleGuiManagerCandidateCount = _battleGuiStateManagers.Count;
         result.BattleGuiProbeStatus = result.BattleGuiManager != 0 ? 2 :
             Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0;
     }
 
     private string GetClassName(nint classObject)
     {
-        if (_classNames.TryGetValue(classObject, out string? result))
+        ulong nameId = *(ulong*)(classObject + 0x18);
+        if (_classNames.TryGetValue(nameId, out string? result))
             return result;
 
         result = ReadName(classObject);
-        _classNames[classObject] = result;
+        _classNames[nameId] = result;
         return result;
     }
 
@@ -665,15 +793,10 @@ internal sealed unsafe class UnrealFadeProbe
         return new string(buffer, 0, length);
     }
 
-    private static nint GetObject(nint chunkTable, int chunkCount, int index)
+    private static class Native
     {
-        int chunkIndex = index / ObjectsPerChunk;
-        if ((uint)chunkIndex >= (uint)chunkCount)
-            return 0;
-        nint chunk = *(nint*)(chunkTable + chunkIndex * sizeof(nint));
-        if (chunk == 0)
-            return 0;
-        return *(nint*)(chunk + (index % ObjectsPerChunk) * ObjectItemSize);
+        [DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
     }
 
     [StructLayout(LayoutKind.Sequential)]

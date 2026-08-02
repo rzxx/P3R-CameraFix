@@ -610,7 +610,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _frameOperationQpc = Stopwatch.GetTimestamp();
         CaptureNativeInputOwnership(operation);
         PollTraceMarkerKey();
-        FadeSnapshot fade = _fadeProbe?.Capture() ?? default;
+        FadeSnapshot fade = _fadeProbe?.Capture(_transitionTrace != null) ?? default;
         CaptureFadeCursorState(operation, deltaTime, fade);
         _frameMouseX = Interlocked.Exchange(ref _pendingMouseX, 0);
         _frameMouseY = Interlocked.Exchange(ref _pendingMouseY, 0);
