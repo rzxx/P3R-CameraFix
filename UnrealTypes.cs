@@ -4,6 +4,14 @@ internal static unsafe class UnrealTypes
 {
     private const int ObjectsPerChunk = 0x10000;
     private const int ObjectItemSize = 0x18;
+    private const int ObjectArrayObjectsOffset = 0x00;
+    private const int ObjectArrayNumElementsOffset = 0x14;
+    private const int ObjectArrayNumChunksOffset = 0x1C;
+    private const int ObjectItemObjectOffset = 0x00;
+    private const int ObjectItemFlagsOffset = 0x08;
+    private const int ObjectItemSerialNumberOffset = 0x10;
+    private const int UObjectFlagsOffset = 0x08;
+    private const int UObjectInternalIndexOffset = 0x0C;
     private const uint InvalidObjectFlags =
         (1u << 21) | // Garbage
         (1u << 22) | // PersistentGarbage
@@ -17,11 +25,13 @@ internal static unsafe class UnrealTypes
         (1u << 30);  // Garbage
 
     /// <summary>
-    /// Non-owning UObject identity. The pointer is retained only as an opaque
-    /// identity token and is never dereferenced before the object-array slot,
-    /// serial number, flags, and current pointer have all been validated.
-    /// Encoding the index as index+1 leaves the all-zero value as null even
-    /// when UE has not allocated a nonzero serial number for an object yet.
+    /// Non-owning UObject identity. Creation accepts a live engine-owned
+    /// pointer and reads its internal index once. Subsequent resolution treats
+    /// the retained pointer only as an opaque identity token: the object-array
+    /// slot, serial number, flags, and current pointer are validated before the
+    /// resolved object is dereferenced. Encoding the index as index+1 leaves
+    /// the all-zero value as null even when UE has not allocated a nonzero
+    /// serial number for an object yet.
     /// </summary>
     public readonly record struct ObjectHandle(int EncodedIndex, int SerialNumber, nint Identity)
     {
@@ -45,13 +55,13 @@ internal static unsafe class UnrealTypes
         if (!handle.IsSet || !TryGetObjectItem(objectArray, handle.Index, out nint item))
             return false;
 
-        if (*(int*)(item + 0x10) != handle.SerialNumber ||
-            (*(uint*)(item + 0x08) & InvalidObjectFlags) != 0)
+        if (*(int*)(item + ObjectItemSerialNumberOffset) != handle.SerialNumber ||
+            (*(uint*)(item + ObjectItemFlagsOffset) & InvalidObjectFlags) != 0)
             return false;
 
-        nint current = *(nint*)item;
+        nint current = *(nint*)(item + ObjectItemObjectOffset);
         if (current == 0 || current != handle.Identity || HasInvalidUObjectFlags(current) ||
-            *(int*)(current + 0x0C) != handle.Index)
+            *(int*)(current + UObjectInternalIndexOffset) != handle.Index)
             return false;
 
         instance = current;
@@ -67,15 +77,18 @@ internal static unsafe class UnrealTypes
         handle = default;
         instance = 0;
         if (!TryGetObjectItem(objectArray, index, out nint item) ||
-            (*(uint*)(item + 0x08) & InvalidObjectFlags) != 0)
+            (*(uint*)(item + ObjectItemFlagsOffset) & InvalidObjectFlags) != 0)
             return false;
 
-        nint current = *(nint*)item;
+        nint current = *(nint*)(item + ObjectItemObjectOffset);
         if (current == 0 || HasInvalidUObjectFlags(current) ||
-            *(int*)(current + 0x0C) != index)
+            *(int*)(current + UObjectInternalIndexOffset) != index)
             return false;
 
-        handle = ObjectHandle.Create(index, *(int*)(item + 0x10), current);
+        handle = ObjectHandle.Create(
+            index,
+            *(int*)(item + ObjectItemSerialNumberOffset),
+            current);
         instance = current;
         return true;
     }
@@ -89,14 +102,17 @@ internal static unsafe class UnrealTypes
         if (instance == 0)
             return false;
 
-        int index = *(int*)(instance + 0x0C);
+        int index = *(int*)(instance + UObjectInternalIndexOffset);
         if (!TryGetObjectItem(objectArray, index, out nint item) ||
-            *(nint*)item != instance ||
-            (*(uint*)(item + 0x08) & InvalidObjectFlags) != 0 ||
+            *(nint*)(item + ObjectItemObjectOffset) != instance ||
+            (*(uint*)(item + ObjectItemFlagsOffset) & InvalidObjectFlags) != 0 ||
             HasInvalidUObjectFlags(instance))
             return false;
 
-        handle = ObjectHandle.Create(index, *(int*)(item + 0x10), instance);
+        handle = ObjectHandle.Create(
+            index,
+            *(int*)(item + ObjectItemSerialNumberOffset),
+            instance);
         return true;
     }
 
@@ -106,9 +122,9 @@ internal static unsafe class UnrealTypes
         if (objectArray == 0 || index < 0)
             return false;
 
-        nint chunkTable = *(nint*)objectArray;
-        int count = *(int*)(objectArray + 0x14);
-        int chunkCount = *(int*)(objectArray + 0x1C);
+        nint chunkTable = *(nint*)(objectArray + ObjectArrayObjectsOffset);
+        int count = *(int*)(objectArray + ObjectArrayNumElementsOffset);
+        int chunkCount = *(int*)(objectArray + ObjectArrayNumChunksOffset);
         int chunkIndex = index / ObjectsPerChunk;
         if (chunkTable == 0 || index >= count || (uint)chunkIndex >= (uint)chunkCount)
             return false;
@@ -122,5 +138,5 @@ internal static unsafe class UnrealTypes
     }
 
     private static bool HasInvalidUObjectFlags(nint instance) =>
-        (*(uint*)(instance + 0x08) & InvalidUObjectFlags) != 0;
+        (*(uint*)(instance + UObjectFlagsOffset) & InvalidUObjectFlags) != 0;
 }

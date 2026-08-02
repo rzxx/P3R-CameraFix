@@ -40,8 +40,11 @@ public class Mod : ModBase
             }
             else
             {
-                if (Configuration.EnableSplineCameraFix || Configuration.EnableFreeCameraFix ||
-                    Configuration.EnableCameraTransitionTrace)
+                if (Configuration.EnableSplineCameraFix ||
+                    Configuration.EnableFreeCameraFix ||
+                    Configuration.EnableCameraTransitionTrace ||
+                    Configuration.EnableSplineCameraTrace ||
+                    Configuration.EnableFreeCameraTrace)
                 {
                     _experimentalSplineCamera = new ExperimentalSplineCamera(context, baseAddress);
                 }
@@ -97,7 +100,7 @@ public class Mod : ModBase
     {
         Configuration = configuration;
         _logger?.WriteLine(
-            $"[{_modConfig.ModId}] Config updated. Live camera behaviors will use it on their next update.");
+            $"[{_modConfig.ModId}] Config updated. Native camera parameters apply on the next camera update; hook and trace options require a restart.");
     }
 
     public override void Disposing()

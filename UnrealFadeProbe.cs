@@ -86,6 +86,11 @@ internal sealed unsafe class UnrealFadeProbe
         });
     }
 
+    /// <summary>
+    /// Captures the compact state used by normal camera operation. This is a
+    /// game-thread-only entry point called from the field-operation tick; it
+    /// also establishes the thread identity used by cross-thread read guards.
+    /// </summary>
     public FadeRuntimeSnapshot CaptureRuntime(bool includeDiagnostics)
     {
         Volatile.Write(ref _gameThreadId, Native.GetCurrentThreadId());
@@ -106,7 +111,8 @@ internal sealed unsafe class UnrealFadeProbe
         }
 
         CacheRuntimeCursorState(fadeAvailable, mode);
-        int status = fadePlayer != 0 ? 2 : _gObjects != 0 && _appendString != 0 ? 1 : 0;
+        int status = fadePlayer != 0 ? 2 :
+            Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0;
         return new FadeRuntimeSnapshot(status, mode);
     }
 
@@ -117,7 +123,8 @@ internal sealed unsafe class UnrealFadeProbe
 
         var result = new FadeSnapshot
         {
-            Status = fadePlayer != 0 ? 2 : _gObjects != 0 && _appendString != 0 ? 1 : 0,
+            Status = fadePlayer != 0 ? 2 :
+                Volatile.Read(ref _gObjects) != 0 && Volatile.Read(ref _appendString) != 0 ? 1 : 0,
             UiSubsystem = uiSubsystem,
             FadePlayer = fadePlayer,
         };
