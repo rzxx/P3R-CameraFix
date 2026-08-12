@@ -95,7 +95,7 @@ public class Config : Configurable<Config>
 
     [DisplayName("Use Direct Gamepad Input")]
     [Category("02 - Advanced Input")]
-    [Description("Reads the right stick before P3R's large upstream deadzone and remap.")]
+    [Description("Polls the right stick through XInput, with GameInput as a non-overlapping fallback for native HID gamepads. Does not hook the game's controller APIs. Restart required.")]
     [DefaultValue(true)]
     public bool EnableDirectController { get; set; } = true;
 
@@ -293,7 +293,7 @@ public class Config : Configurable<Config>
 
     [DisplayName("Trace Raw Input")]
     [Category("99 - Debug")]
-    [Description("Writes raw and native mouse input, cursor warp, device registration, and XInput telemetry. Restart required.")]
+    [Description("Writes raw and native mouse input, cursor warp, and device-registration telemetry. Restart required.")]
     [DefaultValue(false)]
     public bool EnableRawInputTrace { get; set; } = false;
 

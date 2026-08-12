@@ -9,7 +9,7 @@ namespace p3rpc.camfix;
 
 /// <summary>
 /// Diagnostic-only Win32 input recorder. Records WM_MOUSEMOVE messages, direct
-/// raw-input reads, cursor sampling/warping, device registration, and XInput.
+/// raw-input reads, cursor sampling/warping, and device registration.
 /// </summary>
 internal sealed unsafe class RawInputTrace : IDisposable
 {
@@ -30,7 +30,6 @@ internal sealed unsafe class RawInputTrace : IDisposable
     private readonly IHook<GetRawInputDataDelegate> _getRawInputDataHook;
     private readonly IHook<GetCursorPosDelegate> _getCursorPosHook;
     private readonly IHook<SetCursorPosDelegate> _setCursorPosHook;
-    private readonly IHook<XInputGetStateDelegate>? _xInputGetStateHook;
 
     private int _reserved;
     private int _read;
@@ -57,7 +56,7 @@ internal sealed unsafe class RawInputTrace : IDisposable
             FileOptions.SequentialScan));
         _writer.WriteLine($"# stopwatch_frequency={Stopwatch.Frequency.ToString(CultureInfo.InvariantCulture)}");
         _writer.WriteLine($"# process_start_utc={Process.GetCurrentProcess().StartTime.ToUniversalTime():O}");
-        _writer.WriteLine("sequence,kind,qpc_enter,qpc_exit,os_thread,remove_flags,result,raw_type,raw_size,mouse_flags,x,y,usage_page,usage,device_flags,target,user_index,packet,buttons,left_trigger,right_trigger,left_x,left_y,right_x,right_y,message,message_time");
+        _writer.WriteLine("sequence,kind,qpc_enter,qpc_exit,os_thread,remove_flags,result,raw_type,raw_size,mouse_flags,x,y,usage_page,usage,device_flags,target,message,message_time");
         _writer.Flush();
 
         nint user32 = Native.GetModuleHandleW("user32.dll");
@@ -82,19 +81,6 @@ internal sealed unsafe class RawInputTrace : IDisposable
         _getCursorPosHook.Activate();
         _setCursorPosHook.Activate();
 
-        nint xinput = Native.GetModuleHandleW("XINPUT1_3.dll");
-        if (xinput != 0)
-        {
-            nint getStateAddress = Native.GetProcAddress(xinput, "XInputGetState");
-            if (getStateAddress != 0)
-            {
-                _xInputGetStateHook = context.Hooks.CreateHook<XInputGetStateDelegate>(XInputGetState, getStateAddress);
-                _xInputGetStateHook.Activate();
-                _logger.WriteLine($"[P3R CamFix] XInputGetState trace hook active at 0x{getStateAddress:X}.");
-            }
-        }
-        if (_xInputGetStateHook == null)
-            _logger.WriteLine("[P3R CamFix] XInput1_3!XInputGetState was unavailable; gamepad trace disabled.", System.Drawing.Color.Orange);
         _flushTimer = new Timer(_ => FlushReady(), null, 500, 500);
         _logger.WriteLine($"[P3R CamFix] Raw input trace active: {tracePath} (capacity {capacity}).");
     }
@@ -239,37 +225,6 @@ internal sealed unsafe class RawInputTrace : IDisposable
         return result;
     }
 
-    private uint XInputGetState(uint userIndex, nint statePointer)
-    {
-        long enter = Stopwatch.GetTimestamp();
-        uint result = _xInputGetStateHook!.OriginalFunction(userIndex, statePointer);
-        long exit = Stopwatch.GetTimestamp();
-
-        var slot = new TraceSlot
-        {
-            Kind = TraceKind.XInputState,
-            QpcEnter = enter,
-            QpcExit = exit,
-            OsThread = Native.GetCurrentThreadId(),
-            Result = unchecked((int)result),
-            UserIndex = userIndex,
-        };
-        if (result == 0 && statePointer != 0)
-        {
-            byte* state = (byte*)statePointer;
-            slot.Packet = *(uint*)(state + 0x00);
-            slot.Buttons = *(ushort*)(state + 0x04);
-            slot.LeftTrigger = *(byte*)(state + 0x06);
-            slot.RightTrigger = *(byte*)(state + 0x07);
-            slot.LeftX = *(short*)(state + 0x08);
-            slot.LeftY = *(short*)(state + 0x0A);
-            slot.RightX = *(short*)(state + 0x0C);
-            slot.RightY = *(short*)(state + 0x0E);
-        }
-        Reserve(slot);
-        return result;
-    }
-
     private int RegisterRawInputDevices(nint devices, uint deviceCount, uint deviceSize)
     {
         long enter = Stopwatch.GetTimestamp();
@@ -346,7 +301,7 @@ internal sealed unsafe class RawInputTrace : IDisposable
             TraceKind.GetCursor => "get_cursor",
             TraceKind.SetCursor => "set_cursor",
             TraceKind.RegisterDevice => "register",
-            _ => "xinput"
+            _ => "unknown"
         });
         _writer.Write(','); _writer.Write(slot.QpcEnter.ToString(CultureInfo.InvariantCulture));
         _writer.Write(','); _writer.Write(slot.QpcExit.ToString(CultureInfo.InvariantCulture));
@@ -362,15 +317,6 @@ internal sealed unsafe class RawInputTrace : IDisposable
         _writer.Write(','); _writer.Write(slot.Usage.ToString(CultureInfo.InvariantCulture));
         _writer.Write(",0x"); _writer.Write(slot.DeviceFlags.ToString("X", CultureInfo.InvariantCulture));
         _writer.Write(",0x"); _writer.Write(slot.Target.ToString("X", CultureInfo.InvariantCulture));
-        _writer.Write(','); _writer.Write(slot.UserIndex.ToString(CultureInfo.InvariantCulture));
-        _writer.Write(','); _writer.Write(slot.Packet.ToString(CultureInfo.InvariantCulture));
-        _writer.Write(",0x"); _writer.Write(slot.Buttons.ToString("X", CultureInfo.InvariantCulture));
-        _writer.Write(','); _writer.Write(slot.LeftTrigger.ToString(CultureInfo.InvariantCulture));
-        _writer.Write(','); _writer.Write(slot.RightTrigger.ToString(CultureInfo.InvariantCulture));
-        _writer.Write(','); _writer.Write(slot.LeftX.ToString(CultureInfo.InvariantCulture));
-        _writer.Write(','); _writer.Write(slot.LeftY.ToString(CultureInfo.InvariantCulture));
-        _writer.Write(','); _writer.Write(slot.RightX.ToString(CultureInfo.InvariantCulture));
-        _writer.Write(','); _writer.Write(slot.RightY.ToString(CultureInfo.InvariantCulture));
         _writer.Write(','); _writer.Write(slot.Message.ToString(CultureInfo.InvariantCulture));
         _writer.Write(','); _writer.Write(slot.MessageTime.ToString(CultureInfo.InvariantCulture));
         _writer.WriteLine();
@@ -407,10 +353,7 @@ internal sealed unsafe class RawInputTrace : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int SetCursorPosDelegate(int x, int y);
 
-    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    private delegate uint XInputGetStateDelegate(uint userIndex, nint statePointer);
-
-    private enum TraceKind { RawMouse, RawApi, WindowMouse, GetCursor, SetCursor, RegisterDevice, XInputState }
+    private enum TraceKind { RawMouse, RawApi, WindowMouse, GetCursor, SetCursor, RegisterDevice }
 
     private struct TraceSlot
     {
@@ -431,15 +374,6 @@ internal sealed unsafe class RawInputTrace : IDisposable
         public ushort Usage;
         public uint DeviceFlags;
         public nint Target;
-        public uint UserIndex;
-        public uint Packet;
-        public ushort Buttons;
-        public byte LeftTrigger;
-        public byte RightTrigger;
-        public short LeftX;
-        public short LeftY;
-        public short RightX;
-        public short RightY;
         public uint Message;
         public uint MessageTime;
     }

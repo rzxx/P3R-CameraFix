@@ -23,11 +23,10 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const uint WmSysKeyUp = 0x0105;
     private const uint PmRemove = 0x0001;
     private const uint RidInput = 0x10000003;
+    private const uint RidHeader = 0x10000005;
     private const uint RimTypeMouse = 0;
     private const uint RawInputHeaderSizeX64 = 24;
     private const ushort MouseMoveAbsolute = 0x0001;
-    private const ushort GenericDesktopUsagePage = 0x0001;
-    private const ushort MouseUsage = 0x0002;
     private const int VkPageUp = 0x21;
     private const int FldCameraHitSplineVtableRva = 0x4294058;
     private const int FldCameraFreeVtableRva = 0x42901B0;
@@ -44,8 +43,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const float MouseRecoveryYawSpeed = 150f;
     private const float MouseRecoveryPitchSpeed = 90f;
     private const float MouseRecoveryRecentRawGraceSeconds = 0.25f;
-    private const int XInputUserCount = 4;
-    private const float DirectControllerFreshnessSeconds = 0.5f;
 
     private const string OperationTickSignature =
         "40 53 48 83 EC 40 0F 29 74 24 30 48 8B D9 0F 28 F1 E8 ?? ?? ?? ?? 48 83 BB B0 00 00 00 00 0F 84 ?? ?? ?? ??";
@@ -68,11 +65,11 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private readonly CameraTransitionTrace? _transitionTrace;
     private readonly TraceMarkerRecorder? _traceMarker;
     private readonly UnrealFadeProbe? _fadeProbe;
+    private readonly GamepadInputRouter? _gamepadInput;
     private readonly IHook<PeekMessageWDelegate>? _peekMessageHook;
     private readonly IHook<SetCursorPosDelegate>? _setCursorPosHook;
     private readonly IHook<SetCursorDelegate>? _setCursorHook;
     private readonly IHook<ShowCursorDelegate>? _showCursorHook;
-    private readonly IHook<XInputGetStateDelegate>? _xInputGetStateHook;
     private IHook<OperationTickDelegate>? _operationTickHook;
     private IHook<SplineInterpolatorDelegate>? _splineInterpolatorHook;
     private IHook<SplineUpdateDelegate>? _splineUpdateHook;
@@ -138,21 +135,13 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private int _frameSetCursorNonzeroCalls;
     private int _frameSetCursorSuppressedCalls;
     private int _frameShowCursorCalls;
-    private readonly int[] _controllerStickX = new int[XInputUserCount];
-    private readonly int[] _controllerStickY = new int[XInputUserCount];
-    private readonly int[] _controllerConnected = new int[XInputUserCount];
-    private readonly long[] _controllerLastSuccessQpc = new long[XInputUserCount];
-    private readonly long[] _controllerLastActivityQpc = new long[XInputUserCount];
     private int _rightStickX;
     private int _rightStickY;
     private int _directControllerAvailable;
-    private int _activeControllerUserIndex = -1;
     private int _lastOperationStickX;
     private int _lastOperationStickY;
     private int _activeDevice;
     private int _operationSequence;
-    private int _lastRawInputOperation;
-    private int _lastRegistrationCheckOperation;
     private bool _mouseBecameActive;
     private bool _deviceChangedThisFrame;
     private float _mouseIdleSeconds;
@@ -209,6 +198,9 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
                               Mod.Configuration.EnableSplineCameraTrace;
         _cameraInputTraceEnabled = _diagnosticsEnabled ||
                                    Mod.Configuration.EnableFreeCameraTrace;
+
+        if (Mod.Configuration.EnableDirectController)
+            _gamepadInput = new GamepadInputRouter(_logger);
 
         if (Mod.Configuration.EnableCameraTransitionTrace ||
             Mod.Configuration.EnableFreeCameraFix || Mod.Configuration.EnableSplineCameraFix)
@@ -295,26 +287,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             _logger.WriteLine($"[P3R CamFix] Cursor-state call tracing unavailable: {exception.Message}", System.Drawing.Color.Orange);
         }
 
-        try
-        {
-            nint xinput = Native.GetModuleHandleW("XINPUT1_3.dll");
-            nint getState = xinput == 0 ? 0 : Native.GetProcAddress(xinput, "XInputGetState");
-            if (getState != 0)
-            {
-                _xInputGetStateHook = _hooks.CreateHook<XInputGetStateDelegate>(XInputGetState, getState);
-                _xInputGetStateHook.Activate();
-                _logger.WriteLine("[P3R CamFix] Direct gamepad camera input active.");
-            }
-            else
-            {
-                _logger.WriteLine("[P3R CamFix] XInput1_3!XInputGetState unavailable; spline controller will use the game's axis input.", System.Drawing.Color.Orange);
-            }
-        }
-        catch (Exception exception)
-        {
-            _logger.WriteLine($"[P3R CamFix] Direct spline-controller capture unavailable: {exception.Message}", System.Drawing.Color.Orange);
-        }
-
         context.StartupScanner.AddMainModuleScan(OperationTickSignature, result =>
         {
             if (!result.Found)
@@ -393,10 +365,16 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             return result;
 
         nint rawHandle = *(nint*)(messagePointer + 0x18);
+        uint headerSize = RawInputHeaderSizeX64;
+        byte* header = stackalloc byte[(int)RawInputHeaderSizeX64];
+        uint headerRead = Native.GetRawInputData(rawHandle, RidHeader, header, &headerSize, RawInputHeaderSizeX64);
+        if (headerRead < RawInputHeaderSizeX64 || headerRead == uint.MaxValue || *(uint*)header != RimTypeMouse)
+            return result;
+
         uint size = 256;
         byte* buffer = stackalloc byte[(int)size];
         uint read = Native.GetRawInputData(rawHandle, RidInput, buffer, &size, RawInputHeaderSizeX64);
-        if (read < 44 || read == uint.MaxValue || *(uint*)buffer != RimTypeMouse || (*(ushort*)(buffer + 0x18) & MouseMoveAbsolute) != 0)
+        if (read < 44 || read == uint.MaxValue || (*(ushort*)(buffer + 0x18) & MouseMoveAbsolute) != 0)
             return result;
 
         int x = *(int*)(buffer + 0x24);
@@ -422,7 +400,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
                 Volatile.Write(ref _pendingMouseLastQpc, now);
             }
             Volatile.Write(ref _lastAcceptedRawMouseQpc, now);
-            Volatile.Write(ref _lastRawInputOperation, Volatile.Read(ref _operationSequence));
         }
         return result;
     }
@@ -528,92 +505,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private static bool MatchesCursorWarpPacket(int packetX, int packetY, int warpX, int warpY, int tolerance) =>
         Math.Abs((long)packetX - warpX) <= tolerance && Math.Abs((long)packetY - warpY) <= tolerance;
 
-    private uint XInputGetState(uint userIndex, nint statePointer)
-    {
-        uint result = _xInputGetStateHook!.OriginalFunction(userIndex, statePointer);
-        if (userIndex >= XInputUserCount)
-            return result;
-
-        int slot = (int)userIndex;
-        if (result == 0 && statePointer != 0)
-        {
-            int stickX = *(short*)(statePointer + 0x0C);
-            int stickY = *(short*)(statePointer + 0x0E);
-            int previousX = Interlocked.Exchange(ref _controllerStickX[slot], stickX);
-            int previousY = Interlocked.Exchange(ref _controllerStickY[slot], stickY);
-            long now = Stopwatch.GetTimestamp();
-            Volatile.Write(ref _controllerLastSuccessQpc[slot], now);
-            Volatile.Write(ref _controllerConnected[slot], 1);
-            if (IsDeliberateControllerActivity(previousX, previousY, stickX, stickY))
-                Volatile.Write(ref _controllerLastActivityQpc[slot], now);
-        }
-        else
-        {
-            Volatile.Write(ref _controllerConnected[slot], 0);
-            Volatile.Write(ref _controllerStickX[slot], 0);
-            Volatile.Write(ref _controllerStickY[slot], 0);
-            Volatile.Write(ref _controllerLastSuccessQpc[slot], 0);
-            Volatile.Write(ref _controllerLastActivityQpc[slot], 0);
-        }
-        return result;
-    }
-
-    private void RefreshDirectControllerSample(long now)
-    {
-        int selectedSlot = -1;
-        long latestActivityQpc = 0;
-        for (int slot = 0; slot < XInputUserCount; slot++)
-        {
-            if (Volatile.Read(ref _controllerConnected[slot]) == 0)
-                continue;
-
-            long lastSuccessQpc = Volatile.Read(ref _controllerLastSuccessQpc[slot]);
-            if (QpcAgeSeconds(now, lastSuccessQpc) > DirectControllerFreshnessSeconds)
-                continue;
-
-            long activityQpc = Volatile.Read(ref _controllerLastActivityQpc[slot]);
-            if (activityQpc > latestActivityQpc)
-            {
-                latestActivityQpc = activityQpc;
-                selectedSlot = slot;
-            }
-        }
-
-        int previousSlot = Interlocked.Exchange(ref _activeControllerUserIndex, selectedSlot);
-        if (selectedSlot != previousSlot)
-        {
-            if (selectedSlot >= 0)
-                _logger.WriteLine($"[P3R CamFix] Direct gamepad camera input: XInput user {selectedSlot}.");
-            else if (previousSlot >= 0)
-                _logger.WriteLine("[P3R CamFix] Direct gamepad sample unavailable; using the game's native camera axis.", System.Drawing.Color.Orange);
-        }
-
-        if (selectedSlot >= 0 && Volatile.Read(ref _controllerConnected[selectedSlot]) != 0)
-        {
-            Volatile.Write(ref _rightStickX, Volatile.Read(ref _controllerStickX[selectedSlot]));
-            Volatile.Write(ref _rightStickY, Volatile.Read(ref _controllerStickY[selectedSlot]));
-            Volatile.Write(ref _directControllerAvailable, 1);
-            return;
-        }
-
-        Volatile.Write(ref _rightStickX, 0);
-        Volatile.Write(ref _rightStickY, 0);
-        Volatile.Write(ref _directControllerAvailable, 0);
-    }
-
-    private static bool IsDeliberateControllerActivity(int previousX, int previousY, int stickX, int stickY)
-    {
-        float x = NormalizeStick(stickX);
-        float y = NormalizeStick(stickY);
-        float deltaX = NormalizeStick(stickX - previousX);
-        float deltaY = NormalizeStick(stickY - previousY);
-        float configuredDeadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
-        float switchThreshold = Math.Max(0.02f, Math.Clamp(configuredDeadzone, 0f, 0.95f) * 0.5f);
-        bool deliberateChange = (deltaX * deltaX) + (deltaY * deltaY) >= 0.0001f;
-        bool outsideSwitchZone = (x * x) + (y * y) >= switchThreshold * switchThreshold;
-        return deliberateChange && outsideSwitchZone;
-    }
-
     private void OperationTick(nint operation, float deltaTime)
     {
         _operationSequence++;
@@ -651,14 +542,14 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         if (_diagnosticsEnabled)
             CaptureCursorState();
 
-        if (AnyRawMouseEnabled() &&
-            _operationSequence - Volatile.Read(ref _lastRawInputOperation) > 30 &&
-            (_lastRegistrationCheckOperation == 0 || _operationSequence - _lastRegistrationCheckOperation >= 300))
-        {
-            _lastRegistrationCheckOperation = _operationSequence;
-            EnsureRawMouseRegistration();
-        }
-        RefreshDirectControllerSample(_frameOperationQpc);
+        float configuredDeadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
+        float switchThreshold = Math.Max(0.02f, Math.Clamp(configuredDeadzone, 0f, 0.95f) * 0.5f);
+        DirectGamepadSnapshot direct = Mod.Configuration.EnableDirectController
+            ? _gamepadInput?.Poll(switchThreshold) ?? default
+            : default;
+        Volatile.Write(ref _rightStickX, direct.RightStickX);
+        Volatile.Write(ref _rightStickY, direct.RightStickY);
+        Volatile.Write(ref _directControllerAvailable, direct.Available ? 1 : 0);
         int stickX = Volatile.Read(ref _rightStickX);
         int stickY = Volatile.Read(ref _rightStickY);
         InputDevice previous = (InputDevice)Volatile.Read(ref _activeDevice);
@@ -668,14 +559,12 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         {
             next = InputDevice.Mouse;
         }
-        else if (AnyControllerCaptureEnabled() && _xInputGetStateHook != null)
+        else if (direct.Available)
         {
             float x = NormalizeStick(stickX);
             float y = NormalizeStick(stickY);
             float deltaX = NormalizeStick(stickX - _lastOperationStickX);
             float deltaY = NormalizeStick(stickY - _lastOperationStickY);
-            float configuredDeadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
-            float switchThreshold = Math.Max(0.02f, Math.Clamp(configuredDeadzone, 0f, 0.95f) * 0.5f);
             bool deliberateChange = (deltaX * deltaX) + (deltaY * deltaY) >= 0.0001f;
             bool outsideSwitchZone = (x * x) + (y * y) >= switchThreshold * switchThreshold;
             if (deliberateChange && outsideSwitchZone)
@@ -817,10 +706,10 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         float outputBeforeY = ClampFinite(*(float*)(state + 0x28));
         InputDevice device = (InputDevice)Volatile.Read(ref _activeDevice);
 
-        // WM_INPUT registration can disappear across menus/maps. P3R's native
+        // Raw mouse delivery can disappear across menus/maps. P3R's native
         // mouse axis remains distinguishable by its exact 0.006 steps, so use
-        // it to restore mouse ownership and camera input until raw registration
-        // is available again.
+        // it to restore mouse ownership and camera input without mutating the
+        // host game's process-wide raw-input registration.
         if (device != InputDevice.Mouse &&
             IsStickCenteredForDeviceSwitch() &&
             IsQuantizedMouseInput(nativeX, nativeY))
@@ -1358,44 +1247,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         return xQuantized && yQuantized;
     }
 
-    private void EnsureRawMouseRegistration()
-    {
-        nint target = Volatile.Read(ref _messageWindow);
-        if (target == 0) return;
-
-        const int capacity = 64;
-        RawInputDevice* devices = stackalloc RawInputDevice[capacity];
-        uint count = capacity;
-        uint registered = Native.GetRegisteredRawInputDevices(devices, &count, (uint)sizeof(RawInputDevice));
-        if (registered == uint.MaxValue)
-        {
-            _logger.WriteLine($"[P3R CamFix] Could not inspect raw-input registration (Win32 {Marshal.GetLastWin32Error()}).", System.Drawing.Color.Orange);
-            return;
-        }
-
-        for (int index = 0; index < registered; index++)
-        {
-            if (devices[index].UsagePage == GenericDesktopUsagePage && devices[index].Usage == MouseUsage)
-                return;
-        }
-
-        RawInputDevice mouse = new()
-        {
-            UsagePage = GenericDesktopUsagePage,
-            Usage = MouseUsage,
-            Flags = 0,
-            Target = target,
-        };
-        if (Native.RegisterRawInputDevices(&mouse, 1, (uint)sizeof(RawInputDevice)) != 0)
-        {
-            _logger.WriteLine($"[P3R CamFix] Restored missing foreground raw-mouse registration for window 0x{target:X}.");
-        }
-        else
-        {
-            _logger.WriteLine($"[P3R CamFix] Raw-mouse registration restore failed (Win32 {Marshal.GetLastWin32Error()}); using P3R's native mouse axis until it recovers.", System.Drawing.Color.Orange);
-        }
-    }
-
     private static void WriteReplacementState(nint state, float desiredX, float desiredY, float outputX, float outputY)
     {
         WriteVector(state + 0x00, desiredX, desiredY, 0f);
@@ -1469,10 +1320,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     private static bool AnyRawMouseEnabled() =>
         Mod.Configuration.Enabled && Mod.Configuration.EnableRawMouse &&
-        (Mod.Configuration.EnableSplineCameraFix || Mod.Configuration.EnableFreeCameraFix);
-
-    private static bool AnyControllerCaptureEnabled() =>
-        Mod.Configuration.Enabled &&
         (Mod.Configuration.EnableSplineCameraFix || Mod.Configuration.EnableFreeCameraFix);
 
     internal FreeCameraInputSnapshot GetFreeCameraInputSnapshot() => new(
@@ -1637,6 +1484,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         _traceFlushTimer?.Dispose();
         _transitionTrace?.Dispose();
         _traceMarker?.Dispose();
+        _gamepadInput?.Dispose();
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
@@ -1650,9 +1498,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     private delegate int ShowCursorDelegate(int show);
-
-    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    private delegate uint XInputGetStateDelegate(uint userIndex, nint statePointer);
 
     private delegate void OperationTickDelegate(nint operation, float deltaTime);
     private delegate void SplineInterpolatorDelegate(nint state, nint input, float deltaTime);
@@ -1988,12 +1833,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         public static extern uint GetRawInputData(nint rawInput, uint command, void* data, uint* size, uint headerSize);
 
         [DllImport("user32.dll", SetLastError = true)]
-        public static extern uint GetRegisteredRawInputDevices(RawInputDevice* devices, uint* count, uint size);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        public static extern int RegisterRawInputDevices(RawInputDevice* devices, uint count, uint size);
-
-        [DllImport("user32.dll", SetLastError = true)]
         public static extern int GetCursorPos(Point* point);
 
         [DllImport("user32.dll", SetLastError = true)]
@@ -2019,14 +1858,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         public Point ScreenPosition;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RawInputDevice
-    {
-        public ushort UsagePage;
-        public ushort Usage;
-        public uint Flags;
-        public nint Target;
-    }
 }
 
 internal readonly record struct FreeCameraInputSnapshot(

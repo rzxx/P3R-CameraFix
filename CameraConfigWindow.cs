@@ -266,7 +266,7 @@ internal sealed class CameraConfigWindow : Window
         input.Children.Add(MakeCheckBox("Enable Free-Camera Replacement", "Direct input for the normal third-person camera; restart required.", () => _working.EnableFreeCameraFix, value => _working.EnableFreeCameraFix = value));
         input.Children.Add(MakeCheckBox("Enable Spline-Camera Replacement", "Direct input for spline/rail cameras; restart required.", () => _working.EnableSplineCameraFix, value => _working.EnableSplineCameraFix = value));
         input.Children.Add(MakeCheckBox("Use Raw Mouse Input", "Bypasses P3R's center-warped mouse path.", () => _working.EnableRawMouse, value => _working.EnableRawMouse = value));
-        input.Children.Add(MakeCheckBox("Use Direct Gamepad Input", "Bypasses P3R's upstream deadzone/remap.", () => _working.EnableDirectController, value => _working.EnableDirectController = value));
+        input.Children.Add(MakeCheckBox("Use Direct Gamepad Input", "Polls XInput with a non-overlapping GameInput fallback; restart required.", () => _working.EnableDirectController, value => _working.EnableDirectController = value));
         root.Children.Add(WrapGroup("Input Sources", input));
 
         var spline = MakeGroup("Spline Camera");
