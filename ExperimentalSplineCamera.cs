@@ -23,7 +23,6 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const uint WmSysKeyUp = 0x0105;
     private const uint PmRemove = 0x0001;
     private const uint RidInput = 0x10000003;
-    private const uint RidHeader = 0x10000005;
     private const uint RimTypeMouse = 0;
     private const uint RawInputHeaderSizeX64 = 24;
     private const ushort MouseMoveAbsolute = 0x0001;
@@ -365,16 +364,11 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
             return result;
 
         nint rawHandle = *(nint*)(messagePointer + 0x18);
-        uint headerSize = RawInputHeaderSizeX64;
-        byte* header = stackalloc byte[(int)RawInputHeaderSizeX64];
-        uint headerRead = Native.GetRawInputData(rawHandle, RidHeader, header, &headerSize, RawInputHeaderSizeX64);
-        if (headerRead < RawInputHeaderSizeX64 || headerRead == uint.MaxValue || *(uint*)header != RimTypeMouse)
-            return result;
-
         uint size = 256;
         byte* buffer = stackalloc byte[(int)size];
         uint read = Native.GetRawInputData(rawHandle, RidInput, buffer, &size, RawInputHeaderSizeX64);
-        if (read < 44 || read == uint.MaxValue || (*(ushort*)(buffer + 0x18) & MouseMoveAbsolute) != 0)
+        if (read < 44 || read == uint.MaxValue || *(uint*)buffer != RimTypeMouse ||
+            (*(ushort*)(buffer + 0x18) & MouseMoveAbsolute) != 0)
             return result;
 
         int x = *(int*)(buffer + 0x24);
