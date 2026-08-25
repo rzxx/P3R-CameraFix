@@ -47,14 +47,15 @@ Gamepad response presets:
 
 On spline/rail cameras, stick deflection still selects an angle within the authored range, while the spline gamepad multiplier controls how quickly the camera can reach it. Lowering the multiplier calms the camera without shrinking the available view range; returning the stick to center still recenters the controller offset.
 
-The mod's inversion controls apply to its direct raw-mouse and direct XInput paths. If either direct input source is disabled—or the spline camera temporarily uses P3R's native mouse-axis recovery—the native axis is left unchanged and P3R's own inversion setting remains authoritative.
+The mod's inversion controls apply to its direct raw-mouse and direct gamepad paths. If either direct input source is disabled—or the spline camera temporarily uses P3R's native mouse-axis recovery—the native axis is left unchanged and P3R's own inversion setting remains authoritative.
 
 The **Advanced** tab contains input-source toggles, turn-demand smoothing and recenter controls, and the game’s native camera-follow parameters. Most numerical changes apply while the game is running; settings marked as restart-required take effect on the next launch.
 
 ## Technical notes
 
 - Startup signature scans resolve the native free-camera update, spline interpolator, field-camera operation tick, and final view-transform path for the supported executable.
-- Relative `WM_INPUT` counts are bucketed per camera frame and applied at the native pitch/yaw result sites. Right-stick state is read before P3R’s upstream deadzone and remap.
+- Relative mouse `WM_INPUT` counts are bucketed per camera frame and applied at the native pitch/yaw result sites; controller HID packets are ignored by this path.
+- Right-stick state is polled without detouring the game's controller APIs. XInput is preferred when active, GameInput is selected as a mutually exclusive fallback for native HID gamepads, and P3R's native axes remain the final fallback.
 - The spline replacement separates user offset from authored rail motion. Native input locks and rail motion feed its configurable recenter state instead of discarding the stored angle.
 - Native fade, message, actor-UI, field-operation, and battle-command state arbitrate cursor ownership across gameplay transitions.
 - The original camera behavior patch runs when its object is created or its settings change. Debug tracing performs no buffer allocation or file I/O while disabled.
