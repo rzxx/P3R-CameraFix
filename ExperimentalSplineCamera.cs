@@ -26,6 +26,11 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const uint RimTypeMouse = 0;
     private const uint RawInputHeaderSizeX64 = 24;
     private const ushort MouseMoveAbsolute = 0x0001;
+    private const ushort GenericDesktopUsagePage = 0x0001;
+    private const ushort MouseUsage = 0x0002;
+    private const int ErrorInsufficientBuffer = 122;
+    private const int RawMouseStaleOperationThreshold = 30;
+    private const int RawMouseRegistrationCheckInterval = 300;
     private const int VkPageUp = 0x21;
     private const int FldCameraHitSplineVtableRva = 0x4294058;
     private const int FldCameraFreeVtableRva = 0x42901B0;
@@ -141,6 +146,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private int _lastOperationStickY;
     private int _activeDevice;
     private int _operationSequence;
+    private int _lastRawInputOperation;
+    private int _lastRegistrationCheckOperation;
     private bool _mouseBecameActive;
     private bool _deviceChangedThisFrame;
     private float _mouseIdleSeconds;
@@ -394,6 +401,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
                 Volatile.Write(ref _pendingMouseLastQpc, now);
             }
             Volatile.Write(ref _lastAcceptedRawMouseQpc, now);
+            Volatile.Write(ref _lastRawInputOperation, Volatile.Read(ref _operationSequence));
         }
         return result;
     }
@@ -535,6 +543,15 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
                 : MouseSource.None;
         if (_diagnosticsEnabled)
             CaptureCursorState();
+
+        if (AnyRawMouseEnabled() &&
+            _operationSequence - Volatile.Read(ref _lastRawInputOperation) > RawMouseStaleOperationThreshold &&
+            (_lastRegistrationCheckOperation == 0 ||
+             _operationSequence - _lastRegistrationCheckOperation >= RawMouseRegistrationCheckInterval))
+        {
+            _lastRegistrationCheckOperation = _operationSequence;
+            EnsureRawMouseRegistration();
+        }
 
         float configuredDeadzone = Math.Clamp(Mod.Configuration.GamepadDeadzonePercent, 0, 50) / 100f;
         float switchThreshold = Math.Max(0.02f, Math.Clamp(configuredDeadzone, 0f, 0.95f) * 0.5f);
@@ -702,8 +719,8 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
 
         // Raw mouse delivery can disappear across menus/maps. P3R's native
         // mouse axis remains distinguishable by its exact 0.006 steps, so use
-        // it to restore mouse ownership and camera input without mutating the
-        // host game's process-wide raw-input registration.
+        // it to restore mouse ownership while the bounded registration check
+        // recovers direct raw input.
         if (device != InputDevice.Mouse &&
             IsStickCenteredForDeviceSwitch() &&
             IsQuantizedMouseInput(nativeX, nativeY))
@@ -1239,6 +1256,65 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         bool xQuantized = !xNonzero || Math.Abs(x - (MathF.Round(x / step) * step)) <= tolerance;
         bool yQuantized = !yNonzero || Math.Abs(y - (MathF.Round(y / step) * step)) <= tolerance;
         return xQuantized && yQuantized;
+    }
+
+    private void EnsureRawMouseRegistration()
+    {
+        nint target = Volatile.Read(ref _messageWindow);
+        if (target == 0) return;
+
+        Span<RawInputDevice> devices = stackalloc RawInputDevice[64];
+        while (true)
+        {
+            uint count = (uint)devices.Length;
+            uint registered;
+            fixed (RawInputDevice* buffer = devices)
+            {
+                registered = Native.GetRegisteredRawInputDevices(buffer, &count, (uint)sizeof(RawInputDevice));
+                if (registered != uint.MaxValue)
+                {
+                    if (HasRawMouseRegistration(buffer, registered))
+                        return;
+                    break;
+                }
+            }
+
+            int error = Marshal.GetLastWin32Error();
+            if (error != ErrorInsufficientBuffer || count <= (uint)devices.Length || count > int.MaxValue)
+            {
+                _logger.WriteLine($"[P3R CamFix] Could not inspect raw-input registration (Win32 {error}).", System.Drawing.Color.Orange);
+                return;
+            }
+
+            devices = new RawInputDevice[(int)count];
+        }
+
+        RawInputDevice mouse = new()
+        {
+            UsagePage = GenericDesktopUsagePage,
+            Usage = MouseUsage,
+            Flags = 0,
+            Target = target,
+        };
+        if (Native.RegisterRawInputDevices(&mouse, 1, (uint)sizeof(RawInputDevice)) != 0)
+        {
+            _logger.WriteLine($"[P3R CamFix] Restored missing foreground raw-mouse registration for window 0x{target:X}.");
+        }
+        else
+        {
+            _logger.WriteLine($"[P3R CamFix] Raw-mouse registration restore failed (Win32 {Marshal.GetLastWin32Error()}); raw mouse remains unavailable.", System.Drawing.Color.Orange);
+        }
+    }
+
+    private static bool HasRawMouseRegistration(RawInputDevice* devices, uint count)
+    {
+        for (uint index = 0; index < count; index++)
+        {
+            if (devices[index].UsagePage == GenericDesktopUsagePage && devices[index].Usage == MouseUsage)
+                return true;
+        }
+
+        return false;
     }
 
     private static void WriteReplacementState(nint state, float desiredX, float desiredY, float outputX, float outputY)
@@ -1827,6 +1903,12 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         public static extern uint GetRawInputData(nint rawInput, uint command, void* data, uint* size, uint headerSize);
 
         [DllImport("user32.dll", SetLastError = true)]
+        public static extern uint GetRegisteredRawInputDevices(RawInputDevice* devices, uint* count, uint size);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern int RegisterRawInputDevices(RawInputDevice* devices, uint count, uint size);
+
+        [DllImport("user32.dll", SetLastError = true)]
         public static extern int GetCursorPos(Point* point);
 
         [DllImport("user32.dll", SetLastError = true)]
@@ -1850,6 +1932,15 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         public uint Flags;
         public nint Cursor;
         public Point ScreenPosition;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RawInputDevice
+    {
+        public ushort UsagePage;
+        public ushort Usage;
+        public uint Flags;
+        public nint Target;
     }
 
 }
