@@ -28,6 +28,7 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
     private const ushort MouseMoveAbsolute = 0x0001;
     private const ushort GenericDesktopUsagePage = 0x0001;
     private const ushort MouseUsage = 0x0002;
+    private const int ErrorInsufficientBuffer = 122;
     private const int RawMouseStaleOperationThreshold = 30;
     private const int RawMouseRegistrationCheckInterval = 300;
     private const int VkPageUp = 0x21;
@@ -1262,20 +1263,30 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         nint target = Volatile.Read(ref _messageWindow);
         if (target == 0) return;
 
-        const int capacity = 64;
-        RawInputDevice* devices = stackalloc RawInputDevice[capacity];
-        uint count = capacity;
-        uint registered = Native.GetRegisteredRawInputDevices(devices, &count, (uint)sizeof(RawInputDevice));
-        if (registered == uint.MaxValue)
+        Span<RawInputDevice> devices = stackalloc RawInputDevice[64];
+        while (true)
         {
-            _logger.WriteLine($"[P3R CamFix] Could not inspect raw-input registration (Win32 {Marshal.GetLastWin32Error()}).", System.Drawing.Color.Orange);
-            return;
-        }
+            uint count = (uint)devices.Length;
+            uint registered;
+            fixed (RawInputDevice* buffer = devices)
+            {
+                registered = Native.GetRegisteredRawInputDevices(buffer, &count, (uint)sizeof(RawInputDevice));
+                if (registered != uint.MaxValue)
+                {
+                    if (HasRawMouseRegistration(buffer, registered))
+                        return;
+                    break;
+                }
+            }
 
-        for (int index = 0; index < registered; index++)
-        {
-            if (devices[index].UsagePage == GenericDesktopUsagePage && devices[index].Usage == MouseUsage)
+            int error = Marshal.GetLastWin32Error();
+            if (error != ErrorInsufficientBuffer || count <= (uint)devices.Length || count > int.MaxValue)
+            {
+                _logger.WriteLine($"[P3R CamFix] Could not inspect raw-input registration (Win32 {error}).", System.Drawing.Color.Orange);
                 return;
+            }
+
+            devices = new RawInputDevice[(int)count];
         }
 
         RawInputDevice mouse = new()
@@ -1293,6 +1304,17 @@ internal sealed unsafe class ExperimentalSplineCamera : IDisposable
         {
             _logger.WriteLine($"[P3R CamFix] Raw-mouse registration restore failed (Win32 {Marshal.GetLastWin32Error()}); raw mouse remains unavailable.", System.Drawing.Color.Orange);
         }
+    }
+
+    private static bool HasRawMouseRegistration(RawInputDevice* devices, uint count)
+    {
+        for (uint index = 0; index < count; index++)
+        {
+            if (devices[index].UsagePage == GenericDesktopUsagePage && devices[index].Usage == MouseUsage)
+                return true;
+        }
+
+        return false;
     }
 
     private static void WriteReplacementState(nint state, float desiredX, float desiredY, float outputX, float outputY)
